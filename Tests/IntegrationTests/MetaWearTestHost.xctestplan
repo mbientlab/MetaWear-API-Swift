@@ -1,0 +1,30 @@
+{
+  "configurations" : [
+    {
+      "id" : "C691FFD3-1808-4D46-9D42-C4B5E36731BB",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:MetaWearTestHost.xcodeproj",
+      "identifier" : "DEAD000000000000000000AB",
+      "name" : "MetaWearTestHost"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:MetaWearTestHost.xcodeproj",
+        "identifier" : "DEAD000000000000000000AC",
+        "name" : "MetaWearHardwareTests"
+      }
+    }
+  ],
+  "version" : 1
+}

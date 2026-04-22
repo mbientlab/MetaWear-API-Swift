@@ -1,0 +1,403 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AB7B00742F95A7E20056F9AF /* AccelerometerBMI270Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00722F95A7E20056F9AF /* AccelerometerBMI270Tests.swift */; };
+		AB7B00752F95A7E20056F9AF /* AccelerometerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00732F95A7E20056F9AF /* AccelerometerTests.swift */; };
+		AB7B00772F95D0E00056F9AF /* AccelerometerBMI160Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00762F95D0E00056F9AF /* AccelerometerBMI160Tests.swift */; };
+		AB7B00792F95D3CC0056F9AF /* LEDTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00782F95D3CC0056F9AF /* LEDTests.swift */; };
+		DEAD0000000000000000D000 /* TestHostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEAD0000000000000000C000 /* TestHostApp.swift */; };
+		DEAD0000000000000000D001 /* HardwareSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEAD0000000000000000C001 /* HardwareSupport.swift */; };
+		DEAD0000000000000000D002 /* BluetoothSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEAD0000000000000000C002 /* BluetoothSmokeTests.swift */; };
+		DEAD0000000000000000D003 /* ConnectivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEAD0000000000000000C003 /* ConnectivityTests.swift */; };
+		DEAD0000000000000000D009 /* MetaWear in Frameworks */ = {isa = PBXBuildFile; productRef = DEAD0000000000000001B001 /* MetaWear */; };
+		DEAD0000000000000000D00A /* MetaWear in Frameworks */ = {isa = PBXBuildFile; productRef = DEAD0000000000000001B002 /* MetaWear */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		DEAD0000000000000001A000 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DEAD000000000000000000AA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DEAD000000000000000000AB;
+			remoteInfo = MetaWearTestHost;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		AB4D24A92F95A1D1009B1EEB /* MetaWearTestHost.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = MetaWearTestHost.xctestplan; sourceTree = "<group>"; };
+		AB7B00722F95A7E20056F9AF /* AccelerometerBMI270Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AccelerometerBMI270Tests.swift; path = ../MetaWearHardwareTests/AccelerometerBMI270Tests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B00732F95A7E20056F9AF /* AccelerometerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AccelerometerTests.swift; path = ../MetaWearHardwareTests/AccelerometerTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B00762F95D0E00056F9AF /* AccelerometerBMI160Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AccelerometerBMI160Tests.swift; path = ../MetaWearHardwareTests/AccelerometerBMI160Tests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B00782F95D3CC0056F9AF /* LEDTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LEDTests.swift; path = ../MetaWearHardwareTests/LEDTests.swift; sourceTree = SOURCE_ROOT; };
+		DEAD0000000000000000C000 /* TestHostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestHostApp.swift; sourceTree = "<group>"; };
+		DEAD0000000000000000C001 /* HardwareSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HardwareSupport.swift; path = ../MetaWearHardwareTests/HardwareSupport.swift; sourceTree = "<group>"; };
+		DEAD0000000000000000C002 /* BluetoothSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BluetoothSmokeTests.swift; path = ../MetaWearHardwareTests/BluetoothSmokeTests.swift; sourceTree = "<group>"; };
+		DEAD0000000000000000C003 /* ConnectivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConnectivityTests.swift; path = ../MetaWearHardwareTests/ConnectivityTests.swift; sourceTree = "<group>"; };
+		DEAD0000000000000000C009 /* macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = macOS.entitlements; sourceTree = "<group>"; };
+		DEAD0000000000000000CB00 /* MetaWearTestHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MetaWearTestHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DEAD0000000000000000CB01 /* MetaWearHardwareTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MetaWearHardwareTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		DEAD0000000000000000E001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DEAD0000000000000000D009 /* MetaWear in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DEAD0000000000000000E004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DEAD0000000000000000D00A /* MetaWear in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		DEAD000000000000000000AD = {
+			isa = PBXGroup;
+			children = (
+				AB4D24A92F95A1D1009B1EEB /* MetaWearTestHost.xctestplan */,
+				DEAD000000000000000000AF /* TestHost */,
+				DEAD000000000000000000B0 /* MacTests */,
+				DEAD0000000000000000C009 /* macOS.entitlements */,
+				DEAD000000000000000000AE /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		DEAD000000000000000000AE /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				DEAD0000000000000000CB00 /* MetaWearTestHost.app */,
+				DEAD0000000000000000CB01 /* MetaWearHardwareTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		DEAD000000000000000000AF /* TestHost */ = {
+			isa = PBXGroup;
+			children = (
+				DEAD0000000000000000C000 /* TestHostApp.swift */,
+			);
+			path = TestHost;
+			sourceTree = "<group>";
+		};
+		DEAD000000000000000000B0 /* MacTests */ = {
+			isa = PBXGroup;
+			children = (
+				AB7B00782F95D3CC0056F9AF /* LEDTests.swift */,
+				AB7B00762F95D0E00056F9AF /* AccelerometerBMI160Tests.swift */,
+				AB7B00722F95A7E20056F9AF /* AccelerometerBMI270Tests.swift */,
+				AB7B00732F95A7E20056F9AF /* AccelerometerTests.swift */,
+				DEAD0000000000000000C001 /* HardwareSupport.swift */,
+				DEAD0000000000000000C002 /* BluetoothSmokeTests.swift */,
+				DEAD0000000000000000C003 /* ConnectivityTests.swift */,
+			);
+			name = MacTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		DEAD000000000000000000AB /* MetaWearTestHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DEAD000000000000000000F7 /* Build configuration list for PBXNativeTarget "MetaWearTestHost" */;
+			buildPhases = (
+				DEAD0000000000000000E000 /* Sources */,
+				DEAD0000000000000000E001 /* Frameworks */,
+				DEAD0000000000000000E002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MetaWearTestHost;
+			packageProductDependencies = (
+				DEAD0000000000000001B001 /* MetaWear */,
+			);
+			productName = MetaWearTestHost;
+			productReference = DEAD0000000000000000CB00 /* MetaWearTestHost.app */;
+			productType = "com.apple.product-type.application";
+		};
+		DEAD000000000000000000AC /* MetaWearHardwareTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DEAD000000000000000000F8 /* Build configuration list for PBXNativeTarget "MetaWearHardwareTests" */;
+			buildPhases = (
+				DEAD0000000000000000E003 /* Sources */,
+				DEAD0000000000000000E004 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DEAD0000000000000001A001 /* PBXTargetDependency */,
+			);
+			name = MetaWearHardwareTests;
+			packageProductDependencies = (
+				DEAD0000000000000001B002 /* MetaWear */,
+			);
+			productName = MetaWearHardwareTests;
+			productReference = DEAD0000000000000000CB01 /* MetaWearHardwareTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		DEAD000000000000000000AA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					DEAD000000000000000000AB = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					DEAD000000000000000000AC = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = DEAD000000000000000000AB;
+					};
+				};
+			};
+			buildConfigurationList = DEAD000000000000000000F6 /* Build configuration list for PBXProject "MetaWearTestHost" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = DEAD000000000000000000AD;
+			packageReferences = (
+				DEAD0000000000000001B000 /* XCLocalSwiftPackageReference "../.." */,
+			);
+			productRefGroup = DEAD000000000000000000AE /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				DEAD000000000000000000AB /* MetaWearTestHost */,
+				DEAD000000000000000000AC /* MetaWearHardwareTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		DEAD0000000000000000E002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		DEAD0000000000000000E000 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DEAD0000000000000000D000 /* TestHostApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DEAD0000000000000000E003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DEAD0000000000000000D001 /* HardwareSupport.swift in Sources */,
+				DEAD0000000000000000D002 /* BluetoothSmokeTests.swift in Sources */,
+				AB7B00772F95D0E00056F9AF /* AccelerometerBMI160Tests.swift in Sources */,
+				DEAD0000000000000000D003 /* ConnectivityTests.swift in Sources */,
+				AB7B00742F95A7E20056F9AF /* AccelerometerBMI270Tests.swift in Sources */,
+				AB7B00792F95D3CC0056F9AF /* LEDTests.swift in Sources */,
+				AB7B00752F95A7E20056F9AF /* AccelerometerTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DEAD0000000000000001A001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DEAD000000000000000000AB /* MetaWearTestHost */;
+			targetProxy = DEAD0000000000000001A000 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		DEAD000000000000000000F0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		DEAD000000000000000000F1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		DEAD000000000000000000F2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = macOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Hardware tests connect to MetaWear via Bluetooth.";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearTestHost;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		DEAD000000000000000000F3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = macOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Hardware tests connect to MetaWear via Bluetooth.";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearTestHost;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		DEAD000000000000000000F4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearHardwareTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MetaWearTestHost.app/Contents/MacOS/MetaWearTestHost";
+			};
+			name = Debug;
+		};
+		DEAD000000000000000000F5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearHardwareTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MetaWearTestHost.app/Contents/MacOS/MetaWearTestHost";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		DEAD000000000000000000F6 /* Build configuration list for PBXProject "MetaWearTestHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DEAD000000000000000000F0 /* Debug */,
+				DEAD000000000000000000F1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DEAD000000000000000000F7 /* Build configuration list for PBXNativeTarget "MetaWearTestHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DEAD000000000000000000F2 /* Debug */,
+				DEAD000000000000000000F3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DEAD000000000000000000F8 /* Build configuration list for PBXNativeTarget "MetaWearHardwareTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DEAD000000000000000000F4 /* Debug */,
+				DEAD000000000000000000F5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		DEAD0000000000000001B000 /* XCLocalSwiftPackageReference "../.." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DEAD0000000000000001B001 /* MetaWear */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DEAD0000000000000001B000 /* XCLocalSwiftPackageReference "../.." */;
+			productName = MetaWear;
+		};
+		DEAD0000000000000001B002 /* MetaWear */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DEAD0000000000000001B000 /* XCLocalSwiftPackageReference "../.." */;
+			productName = MetaWear;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = DEAD000000000000000000AA /* Project object */;
+}
