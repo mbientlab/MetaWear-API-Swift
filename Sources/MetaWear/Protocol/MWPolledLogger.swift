@@ -15,11 +15,26 @@ public protocol MWPolledLoggable: MWReadable {
     /// 2-byte BLE header. One logger ID is allocated per chunk.
     var logDataChunks: [(offset: UInt8, length: UInt8)] { get }
 
+    /// Source index byte for the logger trigger. Readables with a per-channel
+    /// data id (e.g. the multichannel thermometer) return the channel here so
+    /// the firmware matches the logger to that channel's responses; id-less
+    /// readables use the default `0xFF`.
+    var loggerTriggerIndex: UInt8 { get }
+
     /// Decode one complete sample from the bytes reassembled in chunk order.
     func parseLogSample(from data: Data) throws -> Sample
 }
 
 public extension MWPolledLoggable {
+    var loggerTriggerIndex: UInt8 { 0xFF }
+
+    /// Register byte used in the logger TRIGGER: the readable register with
+    /// the read (0x80) and silent (0x40) bits set — matching the C++ SDK,
+    /// which builds logger triggers from the readable signal's full header
+    /// register (e.g. temperature = `0xC1`, not the bare `0x01`). The
+    /// timer-driven event must issue the matching SILENT read.
+    var loggerTriggerRegister: UInt8 { dataRegister | 0x80 | 0x40 }
+
     /// Default: prepend a synthetic `[module, register]` header so the
     /// existing `parseSample(from:)` (which expects a full BLE packet) works
     /// on the logger-side reassembled payload too.

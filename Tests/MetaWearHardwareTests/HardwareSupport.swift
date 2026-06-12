@@ -7,46 +7,124 @@ import Foundation
 // Scans once for the first 10 seconds; subsequent calls reuse the result.
 // This means the whole suite only pays one scan-timeout, not one per test.
 
-@MainActor private var _cachedDevice: MetaWearDevice? = nil
+@MainActor private var _scanTask: Task<MetaWearDevice, Error>? = nil
 @MainActor private var _cachedScanner: MetaWearScanner? = nil   // keeps MWCentralManager alive
-@MainActor private var _scanAttempted = false
 
-/// Returns the first nearby MetaWear device, or throws if none is found within `timeout`.
+/// Returns a nearby MetaWear device, or throws if none is found within `timeout`.
 ///
-/// On the first call it scans for `timeout` seconds; all subsequent calls
-/// return the cached result immediately (or re-throw if the first scan found nothing).
+/// On the first call it scans; all subsequent calls return the cached result
+/// immediately (or re-throw if the first scan found nothing).
+///
+/// **Multiple boards in range:** with more than one MetaWear advertising, the
+/// old behaviour ("first to answer") connected to a random board per run. Now:
+///  - Set `METAWEAR_TEST_DEVICE` (peripheral-UUID prefix or advertised-name
+///    substring, case-insensitive) to pin a specific board.
+///  - Without the variable, the scan gathers candidates for a few seconds and
+///    picks the lowest peripheral UUID — arbitrary but stable per Mac, so
+///    every run hits the same board.
+/// All candidates are printed so it's always visible which board was chosen.
 @MainActor
 func nearbyDevice(timeout: Duration = .seconds(10)) async throws -> MetaWearDevice {
-    if _scanAttempted {
-        guard let device = _cachedDevice else {
-            throw MWError.operationFailed("No MetaWear device found — is one nearby and powered on?")
-        }
-        return device
+    // Single shared scan task: concurrent suites all await the same scan
+    // instead of racing a boolean flag (which made the second suite see
+    // "scan attempted, no device" while the first was still scanning).
+    if let task = _scanTask {
+        return try await task.value
     }
-    _scanAttempted = true
+    let task = Task { @MainActor in
+        try await performScan(timeout: timeout)
+    }
+    _scanTask = task
+    return try await task.value
+}
 
+@MainActor
+private func performScan(timeout: Duration) async throws -> MetaWearDevice {
     let scanner = MetaWearScanner()
     _cachedScanner = scanner   // prevent deallocation — transport holds unowned centralManager
     scanner.startScan()
     defer { scanner.stopScan() }
 
+    func describe(_ device: MetaWearDevice) -> String {
+        let name = scanner.advertisedNames[device.identifier] ?? "?"
+        return "\(name) (\(device.identifier.uuidString))"
+    }
+
+    let preference = ProcessInfo.processInfo.environment["METAWEAR_TEST_DEVICE"]?.lowercased()
     let deadline = ContinuousClock.now + timeout
+    let gatherDeadline = ContinuousClock.now + .seconds(4)
+
     while ContinuousClock.now < deadline {
-        if let device = scanner.discoveredDevices.values.first {
-            _cachedDevice = device
-            return device
+        let devices = scanner.discoveredDevices.values
+
+        if let preference {
+            if let match = devices.first(where: { device in
+                device.identifier.uuidString.lowercased().hasPrefix(preference)
+                    || (scanner.advertisedNames[device.identifier] ?? "").lowercased().contains(preference)
+            }) {
+                print("\n  Boards in range: \(devices.map(describe).joined(separator: ", "))")
+                print("  Selected (METAWEAR_TEST_DEVICE=\(preference)): \(describe(match))\n")
+                return match
+            }
+        } else if !devices.isEmpty, ContinuousClock.now >= gatherDeadline {
+            // Gather window elapsed — make the stable choice.
+            let chosen = devices.min { $0.identifier.uuidString < $1.identifier.uuidString }!
+            print("\n  Boards in range: \(devices.map(describe).joined(separator: ", "))")
+            print("  Selected (lowest UUID; set METAWEAR_TEST_DEVICE to override): \(describe(chosen))\n")
+            return chosen
         }
         try? await Task.sleep(for: .milliseconds(300))
     }
 
-    throw MWError.operationFailed("No MetaWear device found after \(timeout) — is one nearby and powered on?")
+    throw MWError.operationFailed(
+        preference != nil
+            ? "No MetaWear matching METAWEAR_TEST_DEVICE='\(preference!)' found after \(timeout)"
+            : "No MetaWear device found after \(timeout) — is one nearby and powered on?"
+    )
 }
 
 // MARK: - Connected device scope
 
-/// Finds a nearby device, connects, runs `body`, then always disconnects — even on throw.
+/// One link in the global hardware-access queue. Swift Testing runs different
+/// suites concurrently even when each is `.serialized`; two suites connecting
+/// to the same cached device throw "Already connected or connecting". Every
+/// `withConnectedDevice` chains onto the queue tail so exactly one test
+/// touches the board at a time, across all suites. MainActor isolation makes
+/// the open-before-wait ordering race-free.
 @MainActor
-func withConnectedDevice(_ body: (MetaWearDevice) async throws -> Void) async throws {
+private final class HardwareGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var opened = false
+
+    func wait() async {
+        guard !opened else { return }
+        await withCheckedContinuation { self.continuation = $0 }
+    }
+
+    func open() {
+        opened = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@MainActor private var _hardwareQueueTail: HardwareGate? = nil
+
+/// Finds a nearby device, connects, runs `body`, then always disconnects — even on throw.
+/// Globally serialized across suites (see `HardwareGate`).
+@MainActor
+func withConnectedDevice(_ body: @MainActor (MetaWearDevice) async throws -> Void) async throws {
+    let previous = _hardwareQueueTail
+    let gate = HardwareGate()
+    _hardwareQueueTail = gate
+    await previous?.wait()
+    defer { gate.open() }
+
+    try await connectAndRun(body)
+}
+
+@MainActor
+private func connectAndRun(_ body: @MainActor (MetaWearDevice) async throws -> Void) async throws {
     let device = try await nearbyDevice()
     try await device.connect()
 

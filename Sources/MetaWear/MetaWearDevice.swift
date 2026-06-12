@@ -478,7 +478,12 @@ public actor MetaWearDevice {
         let readData = logger.readable.readCommand
         let action: MWEventAction = {
             let module = MWModule(rawValue: readData[0]) ?? .debug
-            let register = readData.count > 1 ? readData[1] : 0
+            // Force the SILENT bit (0x40) onto the read register: silent
+            // responses route to the board's internal data path — which is
+            // what the logger taps. A loud read (0x80 only) goes out over
+            // BLE to the host and the logger captures nothing (verified on
+            // MMS firmware 1.7.2).
+            let register = (readData.count > 1 ? readData[1] : 0) | 0x40
             let params = readData.count > 2 ? readData.advanced(by: 2) : Data()
             return MWEventAction(module: module, register: register, params: params)
         }()
@@ -494,10 +499,15 @@ public actor MetaWearDevice {
         var chunks: [(id: UInt8, byteCount: Int)] = []
         for chunk in logger.readable.logDataChunks {
             let packedByte: UInt8 = ((chunk.length &- 1) << 5) | chunk.offset
+            // Trigger names the readable's FULL register byte (read + silent
+            // bits, e.g. temperature = 0xC1) and its channel index — matching
+            // how the C++ SDK builds logger triggers from the signal header.
+            // A bare register byte (0x01) with index 0xFF never matches the
+            // silent read responses and the log stays empty.
             let cmd = Data([MWModule.logging.rawValue, 0x02,
                             logger.readable.module.rawValue,
-                            logger.readable.dataRegister,
-                            0xFF, packedByte])
+                            logger.readable.loggerTriggerRegister,
+                            logger.readable.loggerTriggerIndex, packedByte])
             let response = try await proto.writeAndAwaitNotification(
                 command: cmd, awaitModule: .logging, awaitRegister: 0x02
             )
@@ -586,8 +596,14 @@ public actor MetaWearDevice {
         for logger: MWPolledLogger<R>,
         using active: [ActiveLogger]
     ) throws {
+        // The board echoes the trigger's FULL register byte (read + silent
+        // bits) — normalize both sides so 0xC1 matches dataRegister 0x01.
         let matched = active
-            .filter { $0.module == logger.readable.module && $0.register == logger.readable.dataRegister }
+            .filter {
+                $0.module == logger.readable.module
+                    && ($0.register & 0x3F) == (logger.readable.dataRegister & 0x3F)
+                    && $0.channel == logger.readable.loggerTriggerIndex
+            }
             .sorted { $0.loggerID < $1.loggerID }
         guard !matched.isEmpty else {
             throw MWError.operationFailed(
@@ -1140,8 +1156,10 @@ public actor MetaWearDevice {
     /// enumeration from `queryActiveLoggers()`, so callers recovering multiple
     /// sensors pay for the slot scan once.
     public func recoverLoggers<L: MWLoggable>(for loggable: L, using active: [ActiveLogger]) throws {
+        // Normalized register comparison (& 0x3F) so triggers created with
+        // read/silent bits still match the loggable's bare data register.
         let matched = active
-            .filter { $0.module == loggable.module && $0.register == loggable.dataRegister }
+            .filter { $0.module == loggable.module && ($0.register & 0x3F) == (loggable.dataRegister & 0x3F) }
             .sorted { $0.loggerID < $1.loggerID }
         guard !matched.isEmpty else {
             throw MWError.operationFailed(

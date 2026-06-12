@@ -1051,8 +1051,16 @@ public extension MetaWearDevice {
         await ensureProcessorDemux()
         let (stream, cont) = AsyncThrowingStream<Data, Error>.makeStream()
         processorContinuations[handle.id] = cont
-        // NOTIFY_ENABLE: [0x09, 0x07, proc_id, 0x01]
+        // Two enables, mirroring C++ `MblMwDataProcessor::subscribe()`:
+        //  1. NOTIFY_ENABLE [0x09, 0x07, proc_id, 0x01] — route this
+        //     processor's output to the NOTIFY register.
+        //  2. NOTIFY [0x09, 0x03, 0x01] — subscribe the NOTIFY register
+        //     itself (the standard per-register notify-enable write).
+        // Without #2 the board emits NOTHING for any processor — verified on
+        // MMS firmware 1.7.2, where omitting it produced zero notifications
+        // from an actively-fed counter.
         try await writeRaw(Data([MWModule.dataProcessor.rawValue, 0x07, handle.id, 0x01]))
+        try await writeRaw(Data([MWModule.dataProcessor.rawValue, 0x03, 0x01]))
         return stream
     }
 

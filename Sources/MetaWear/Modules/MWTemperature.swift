@@ -132,8 +132,27 @@ public struct MWThermometer: MWReadable {
 // — three bytes of payload after the BLE header: the channel byte plus a signed
 // Int16 (Celsius × 8). One 3-byte log chunk fits in a single 4-byte flash entry.
 extension MWThermometer: MWPolledLoggable {
+    /// Log the 2-byte temperature value at payload offset 0. The firmware
+    /// strips the channel data-id byte before logging (the trigger's channel
+    /// index already matched it), so the Int16 value IS the payload.
+    /// Hardware-verified on MMS fw 1.7.2: offset 1 produced misaligned
+    /// values (the high byte plus a garbage byte); offset 0 decodes cleanly.
     public var logDataChunks: [(offset: UInt8, length: UInt8)] {
-        [(offset: 0, length: 3)]
+        [(offset: 0, length: 2)]
+    }
+
+    /// The thermometer's responses carry a channel data-id; the logger
+    /// trigger must name the channel to match them.
+    public var loggerTriggerIndex: UInt8 { channel }
+
+    /// Reassembled log data is the bare Int16 (Celsius × 8) — no channel
+    /// byte, so the default header-prepending decode doesn't fit.
+    public func parseLogSample(from data: Data) throws -> Float {
+        let p = Data(data)
+        guard p.count >= 2 else {
+            throw MWError.operationFailed("Temperature log chunk too short: \(p.count) bytes")
+        }
+        return Float(MWPacketParser.parseInt16LE(p, offset: 0)) / 8.0
     }
 }
 
