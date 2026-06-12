@@ -4,12 +4,50 @@ A clean-room Swift 6 implementation of the MetaWear protocol.
 
 ## Requirements
 
-| Requirement | Version |
-|-------------|---------|
-| Swift | 6.0+ |
-| iOS | 17+ |
-| macOS | 14+ |
-| Xcode | 16+ |
+| Requirement   | Version   |
+|---------------|-----------|
+| Swift         | 6.0+      |
+| iOS           | 17+       |
+| macOS         | 14+       |
+| Xcode         | 16+       |
+
+---
+
+## Supported boards
+
+This SDK targets MbientLab MetaMotion boards only. Anything else (legacy MetaWear R / RG / RPro / C / CPro, MetaMotion C, MetaEnvironment, MetaTracker, MetaHealth) is treated as `MWModel.unknown` — connect / read may still work but module-level behaviour is not validated.
+
+| Board                | Model number (`0x2A24`) | Hardware revisions (`0x2A27`)                | Acc / Gyro chip |
+|----------------------|:-----------------------:|:---------------------------------------------|:----------------|
+| MetaMotion R / RL    | `5`                     | `r0.1`, `r0.2`, `r0.3`, `r0.4`, `r0.5`       | BMI160          |
+| MetaMotion S         | `8`                     | `r0.1`                                        | BMI270          |
+
+`MWModel` decodes the Model Number characteristic into a typed case; `MWDeviceInformation.isHardwareRevisionSupported` cross-checks the revision against the table above:
+
+```swift
+guard let info = await device.deviceInfo else { return }
+print(info.model.name)                          // "MetaMotion R / RL" or "MetaMotion S"
+print(info.model.supportedHardwareRevisions)    // ["r0.1", ..., "r0.5"]  or  ["r0.1"]
+if !info.isHardwareRevisionSupported {
+    // Either an unsupported board model or a revision not on file.
+}
+```
+
+The validator is forgiving about formatting — `"r0.4"`, `"R0.4"`, and `"0.4"` all match.
+
+---
+
+## What ships in this repository
+
+| Product / target                  | Kind        | What it is                                                                                       |
+|-----------------------------------|-------------|--------------------------------------------------------------------------------------------------|
+| `MetaWear`                        | library     | Core SDK — scanner, device actor, BLE transport, protocol layer, every sensor module             |
+| `MetaWearPersistence`             | library     | SwiftData session storage, depends on `MetaWear`                                                  |
+| `MetaWearFirmware`                | library     | Over-the-air firmware update, wraps NordicDFU 4.16.0 (`@preconcurrency`) in an actor-isolated `DFUSession` |
+| `MetaWearDemo`                    | executable  | macOS CLI that exercises the core SDK against a real board                                       |
+| `Apps/MetaWear/MetaWearApp.xcodeproj` | iOS app | SwiftUI demo — scan / connect / live-stream / log / download / export, SwiftData-backed sessions  |
+
+The four SwiftPM products are intentionally split so an app can take just `MetaWear` without pulling NordicDFU or SwiftData. Hardware integration tests (`MetaWearHardwareTests`) live in `Tests/IntegrationTests/MetaWearTestHost.xcodeproj` — see [Hardware integration tests](#hardware-integration-tests).
 
 ---
 
@@ -17,9 +55,10 @@ A clean-room Swift 6 implementation of the MetaWear protocol.
 
 ### Add the package
 
-In Xcode: **File → Add Package Dependencies**, enter the repo URL.
+In Xcode: File → Add Package Dependencies, enter the repo URL.
 
 In `Package.swift`:
+
 ```swift
 dependencies: [
     .package(url: "...", from: "1.0.0")
@@ -50,7 +89,7 @@ try await device.connect()
 
 ```swift
 let sensor = MWAccelerometerBMI160(odr: .hz100, range: .g2)
-let stream = try await device.stream(sensor)
+let stream = try await device.startStream(sensor)
 
 for try await sample in stream {
     print(sample.time, sample.value.x, sample.value.y, sample.value.z)
@@ -71,7 +110,7 @@ try await Task.sleep(for: .seconds(3))
 try await device.send(MWLED.Stop())
 ```
 
-### Fire the haptic motor
+### Buzz the haptic motor
 
 ```swift
 try await device.send(MWHaptic.motor(dutyCycle: 80, pulseWidth: 500))
@@ -97,22 +136,24 @@ try await device.send(MWHaptic.motor(dutyCycle: 80, pulseWidth: 500))
 │  MWPacketParser   (static helpers)           │
 ├──────────────────────────────────────────────┤
 │  BLETransport     (protocol)                 │
-├──────────────────┬───────────────────────────┤
-│  MWCentralManager│ CoreBluetoothPeripheral   │
-│  (shared)        │ Transport (per device)    │
-├──────────────────┴───────────────────────────┤
-│  MockBLETransport (unit tests, no hardware)  │
+├───────────────────┬──────────────────────────┤
+│  MWCentralManager │ CoreBluetoothPeripheral  │
+│  (shared)         │ Transport (per device)   │
+├───────────────────┴──────────────────────────┤
+│  MockBLETransport  (unit tests, SwiftPM)     │
+│  MetaWearTestHost.xcodeproj (hardware tests) │
 └──────────────────────────────────────────────┘
 ```
 
 ### Key design decisions
 
-| Concern | Choice | Why |
-|---|---|---|
-| Async sequences | `AsyncThrowingStream` | Errors propagate on BLE drop; no Combine dependency |
-| Thread safety | `actor` | Compiler-enforced, Swift 6 native |
-| BLE wrapper | Custom `CoreBluetoothTransport` | Third-party libs use Combine for notifications |
-| Observation | `@Observable` | SwiftUI-native, less boilerplate than `ObservableObject` |
+| Concern           | Choice                                    | Why                                                           |
+|-------------------|-------------------------------------------|---------------------------------------------------------------|
+| Async sequences   | `AsyncThrowingStream`                     | Errors propagate on BLE drop; no Combine dependency           |
+| Thread safety     | `actor`                                   | Compiler-enforced, Swift 6 native                             |
+| BLE wrapper       | Custom `CoreBluetoothTransport`           | Third-party libs use Combine for notifications                |
+| Observation       | `@Observable`                             | SwiftUI-native, less boilerplate than `ObservableObject`      |
+| Hardware tests    | Separate Xcode project with app test host | CoreBluetooth denies BT permission to `swift test` on macOS   |
 
 ---
 
@@ -120,21 +161,28 @@ try await device.send(MWHaptic.motor(dutyCycle: 80, pulseWidth: 500))
 
 ### MetaWearScanner
 
-`@Observable @MainActor` class — safe to bind directly to SwiftUI views. Owns a single `MWCentralManager` (which owns the `CBCentralManager`). Each discovered peripheral gets its own isolated `CoreBluetoothPeripheralTransport` and `MetaWearDevice`.
+`@Observable @MainActor` class — safe to bind directly to SwiftUI views. 
+Owns a single `MWCentralManager` (which owns the `CBCentralManager`). 
+Each discovered peripheral gets its own isolated `CoreBluetoothPeripheralTransport` and `MetaWearDevice`.
 
 ```swift
 public final class MetaWearScanner {
     public private(set) var discoveredDevices: [UUID: MetaWearDevice]
+    public private(set) var advertisedNames:   [UUID: String]   // most-recent local name per UUID
     public private(set) var isScanning: Bool
 
     public func startScan()
     public func stopScan()
+    public func clearAdvertisedName(for uuid: UUID)             // force next scan to recapture
 }
 ```
 
+`advertisedNames` is updated on every scan result, **before** the MetaWear-prefix filter, so a device that has been renamed via `MWSettings.SetDeviceName` (and no longer advertises as `"MetaWear…"`) is still observable by UUID. Combined with `clearAdvertisedName(for:)`, this is how the settings integration test verifies that a rename reached the air.
+
 ### MetaWearDevice
 
-`actor` — all state is actor-isolated, thread-safe by default. Enforces the device state machine at compile time; invalid transitions throw `MWError.invalidState`.
+`actor` — all state is actor-isolated, thread-safe by default. 
+Enforces the device state machine at compile time; invalid transitions throw `MWError.invalidState`.
 
 ```
 .disconnected → .idle → .streaming
@@ -147,19 +195,19 @@ Key methods:
 public func connect() async throws
 public func disconnect() async throws
 
-public func stream<S: MWStreamable>(_ sensor: S, usePacked: Bool = true)
+public func startStream<S: MWStreamable>(_ sensor: S, usePacked: Bool = true)
     async throws -> AsyncThrowingStream<Timestamped<S.Sample>, Error>
 public func stopStreaming<S: MWStreamable>(_ sensor: S) async throws
 
 public func startLogging<L: MWLoggable>(_ loggable: L) async throws
 public func stopLogging<L: MWLoggable>(_ loggable: L) async throws
+
 public func downloadLogs() async throws -> AsyncThrowingStream<Download<[RawLogEntry]>, Error>
 public func downloadLogs<L: MWLoggable>(_ loggable: L)
     async throws -> AsyncThrowingStream<Download<[MWLoggedSample<L.Sample>]>, Error>
 public func clearLog() async throws
 @discardableResult public func flushLogPage() async throws -> Bool
 
-public func readBattery() async throws -> BatteryState
 public func read<R: MWReadable>(_ readable: R) async throws -> Timestamped<R.Sample>
 public func poll<P: MWPollable>(_ readable: P, every: Duration)
     -> AsyncThrowingStream<Timestamped<P.Sample>, Error>
@@ -171,20 +219,21 @@ public func send(_ sequence: any MWCommandSequence) async throws
 
 The single `CBCentralManager` is shared across all devices; per-peripheral state is isolated:
 
-| Type | Role |
-|---|---|
-| `MWCentralManager` | Owns `CBCentralManager`. Routes `didConnect`/`didDisconnect` to the correct device transport by UUID. Internal. |
-| `CoreBluetoothPeripheralTransport` | One per device. Owns `CBPeripheral`, characteristics, read/write continuations, notify streams, write queue. Implements `BLETransport`. Internal. |
-| `MockBLETransport` | Public in-memory transport for unit tests. Inject notifications with `inject(notification:to:)`. No hardware required. |
+| Type                                  | Role                                                                                                                                              |
+|---------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| `MWCentralManager`                    | Owns `CBCentralManager`. Routes `didConnect`/`didDisconnect` to the correct device transport by UUID. Internal.                                   |
+| `CoreBluetoothPeripheralTransport`    | One per device. Owns `CBPeripheral`, characteristics, read/write continuations, notify streams, write queue. Implements `BLETransport`. Internal. |
+| `MockBLETransport`                    | Public in-memory transport for unit tests. Inject notifications with `inject(notification:to:)`. No hardware required.                            |
 
-Both real transports use the `nonisolated` delegate pattern — CoreBluetooth callbacks hop back into the actor via `Task { await self.handle…() }`.
+Both real transports use the `nonisolated` delegate pattern.
+CoreBluetooth callbacks hop back into the actor via `Task { await self.handle…() }`.
 
 ### MWProtocolLayer
 
-Routes raw BLE notification bytes to the right handler by `(module_id, register_id)` key.
+Routes raw BLE notification bytes to the right handler by `(module_id, register_id)` key:
 
-- **Read responses** (`register | 0x80` bit set) → resume the parked `CheckedContinuation`
-- **Unsolicited notifications** → yield to the subscribed `AsyncThrowingStream.Continuation`
+- Read responses (`register | 0x80` bit set) → resume the parked `CheckedContinuation`
+- Unsolicited notifications → yield to the subscribed `AsyncThrowingStream.Continuation`
 - Multiple concurrent reads on the same key are queued and resolved FIFO
 - All waiters and streams are failed when `stop()` is called (e.g. on disconnect)
 
@@ -229,8 +278,7 @@ protocol MWReadable: MWSensor {
 protocol MWPollable: MWReadable {}
 ```
 
-`device.send(_:)` is overloaded for both commands and sequences — a single
-call site regardless of whether the action emits one or many writes.
+`device.send(_:)` is overloaded for both commands and sequences — a single call site regardless of whether the action emits one or many writes.
 
 ### Generic read and poll
 
@@ -242,22 +290,16 @@ Any `MWReadable` works with the generic `device.read(_:)` helper; any
 let humidity = try await device.read(MWHumidity())          // Timestamped<Float>
 let entries  = try await device.read(MWLogLength())         // Timestamped<UInt32>
 let mac      = try await device.read(MWMACAddress())        // Timestamped<String>
-let resetAt  = try await device.read(MWLastResetTime())     // Timestamped<Date>
+let reset    = try await device.read(MWLastResetTime())     // Timestamped<MWLastResetTime.Reading> — { epoch: Date, resetUID: UInt8 }
 
-for try await sample in await device.poll(MWSettings.ReadBatteryState(),
-                                          every: .seconds(30)) {
+for try await sample in await device.poll(MWSettings.ReadBatteryState(), every: .seconds(30)) {
     updateBatteryUI(sample.value)
 }
 ```
 
-`poll` reads the sensor, yields the timestamped sample, sleeps for the given
-`Duration`, and repeats. Cancelling the enclosing `Task` or breaking out of
-the `for await` loop stops the loop and ends the stream.
+`poll` reads the sensor, yields the timestamped sample, sleeps for the given `Duration`, and repeats. Cancelling the enclosing `Task` or breaking out of the `for await` loop stops the loop and ends the stream.
 
-Built-in `MWPollable` conformers: `MWLogLength`, `MWLastResetTime`,
-`MWMACAddress`, `MWSettings.ReadBatteryState`, `MWSettings.ReadPowerStatus`,
-`MWSettings.ReadChargeStatus`, `MWHumidity`, `MWBarometerPressureRead`,
-`MWThermometer`, `MWSensorFusionCalibrationState`.
+Built-in `MWPollable` conformers: `MWLogLength`, `MWLastResetTime`, `MWMACAddress`, `MWSettings.ReadBatteryState`, `MWSettings.ReadPowerStatus`, `MWSettings.ReadChargeStatus`, `MWHumidity`, `MWBarometerPressureRead`, `MWThermometer`, `MWSensorFusionCalibrationState`.
 
 ---
 
@@ -266,36 +308,42 @@ Built-in `MWPollable` conformers: `MWLogLength`, `MWLastResetTime`,
 ### Accelerometer
 
 ```swift
-// BMI160 (MetaWear R/C/RPro/CPro, MetaMotion R/C)
-let acc = MWAccelerometerBMI160(odr: .hz100, range: .g2)
+// BMI160 (MetaMotion R / RL — model 5)
 // ODR: .hz0_78 … .hz1600
 // Range: .g2, .g4, .g8, .g16
+let acc = MWAccelerometerBMI160(odr: .hz100, range: .g2)
 
-// BMI270 (MetaMotion S)
+// BMI270 (MetaMotion S — model 8)
+// Same ODR / Range options as BMI160
 let acc = MWAccelerometerBMI270(odr: .hz100, range: .g2)
 ```
 
-Packed data (3 samples per BLE packet) is used automatically when `usePacked: true` (default). Scale factors (LSB/g): ±2g = 16384, ±4g = 8192, ±8g = 4096, ±16g = 2048.
+Packed data (3 samples per BLE packet) is used automatically when `usePacked: true` (default). 
+Scale factors (LSB/g): ±2g = 16384, ±4g = 8192, ±8g = 4096, ±16g = 2048.
 
 ### Gyroscope
 
 ```swift
-let gyro = MWGyroscopeBMI160(odr: .hz100, range: .dps2000)
+// BMI160 (MetaMotion R / RL — model 5)
 // ODR: .hz25 … .hz3200
 // Range: .dps125, .dps250, .dps500, .dps1000, .dps2000
+let gyro = MWGyroscopeBMI160(odr: .hz100, range: .dps2000)
 
+// BMI270 (MetaMotion S — model 8)
+// Same options as BMI160
 let gyro = MWGyroscopeBMI270(odr: .hz100, range: .dps2000)
 ```
 
 ### Bosch motion detectors (accelerometer interrupts)
 
 Orientation, any-motion, and tap interrupts are generated on-chip by the BMI160 / BMI270.
-Configure + enable the detector, then subscribe to the accelerometer interrupt register to
-receive decoded events.
+Configure + enable the detector, then subscribe to the accelerometer interrupt register to receive decoded events.
 
 ```swift
 // Orientation — fires when the device rotates through one of 8 states (register 0x11)
-try await device.send(MWAccelerometerBosch.EnableOrientation())
+// BMI160-only; constructing with `.bmi270` throws MWError.operationFailed.
+try await device.send(MWAccelerometerBosch.EnableOrientation(chip: .bmi160))
+
 // Consume raw [0x03, 0x11, byte] notifications and decode:
 let orientation = try MWAccelerometerBosch.parseOrientation(from: packet)
 
@@ -303,6 +351,7 @@ let orientation = try MWAccelerometerBosch.parseOrientation(from: packet)
 try await device.send(MWAccelerometerBosch.ConfigureAnyMotion(
     chip: .bmi160, count: 4, thresholdG: 0.75, rangeG: 8.0
 ))
+
 try await device.send(MWAccelerometerBosch.EnableAnyMotion())
 let event = try MWAccelerometerBosch.parseAnyMotion(from: packet)
 // event.isPositive, event.xAxisActive / yAxisActive / zAxisActive
@@ -317,11 +366,9 @@ let tap = try MWAccelerometerBosch.parseTap(from: packet)   // tap.type, tap.isP
 
 ### BMI270 extra features (activity, wrist, no-motion, downsampling)
 
-BMI270-only features exposed via `MWAccelerometerBMI270Features`. `Configure…`
-and `SetDownsampling` conform to `MWCommand`; the `Enable…` / `Disable…`
-pairs (which emit both `FEATURE_INTERRUPT_ENABLE` and `FEATURE_ENABLE` writes)
-conform to `MWCommandSequence`. Both ship through the same `device.send(_:)`
-entry point.
+BMI270-only features exposed via `MWAccelerometerBMI270Features`. `Configure…` and `SetDownsampling` conform to `MWCommand`;
+the `Enable…` / `Disable…` pairs (which emit both `FEATURE_INTERRUPT_ENABLE` and `FEATURE_ENABLE` writes) conform to `MWCommandSequence`.
+Both ship through the same `device.send(_:)` entry point.
 
 ```swift
 // Activity classification — still / walking / running / unknown (register 0x0C, bit 0x04)
@@ -381,7 +428,7 @@ let als = MWAmbientLight(
     integrationTime: .ms100,            // .ms50 … .ms400
     measurementRate: .ms500             // .ms50 … .ms2000
 )
-let stream = try await device.stream(als)
+let stream = try await device.startStream(als)
 for try await sample in stream {
     let lux = MWAmbientLight.lux(from: sample.value)   // raw UInt32 milli-lux → Float lux
     print("ambient:", lux, "lx")
@@ -408,6 +455,24 @@ MWSensorFusionGravity(mode: .imuPlus)         // → CartesianFloat (g)
 MWSensorFusionLinearAcceleration(mode: .ndof) // → CartesianFloat (g, gravity removed)
 // Modes: .ndof (9-DOF), .imuPlus (6-DOF), .compass, .m4g
 ```
+
+The fusion module is fed by the underlying accelerometer + gyroscope (+ magnetometer for `.ndof` / `.compass` / `.m4g`) on the same board. `startStream` / `startLogging` configures and starts those underlying sensors for you — but the BMI160 and BMI270 chips encode their config bytes differently, so the fusion struct needs to know which chip is on the board. Pass it via `chip:` (defaults to `.bmi160`):
+
+```swift
+// Auto-detect from the gyro module's implementation byte
+// (0 = BMI160 on MetaMotion R / RL, 1 = BMI270 on MetaMotion S).
+// Falls back to .bmi160 if the board reports something unexpected.
+let chip: MWSensorFusionChip = {
+    if let impl = await device.moduleInfo(for: .gyro)?.implementation,
+       let c = MWSensorFusionChip(gyroImpl: impl) { return c }
+    return .bmi160
+}()
+
+let q = MWSensorFusionQuaternion(mode: .ndof, chip: chip)
+let stream = try await device.startStream(q)
+```
+
+If you skip the chip argument, the SDK assumes BMI160. On a MetaMotion S (BMI270) the underlying acc/gyro will receive the wrong config bytes silently — the fusion algorithm will run, but at the wrong ODR / range — so always pass the detected chip on those boards.
 
 ### LED (module 0x02)
 
@@ -452,7 +517,7 @@ let voltage:  UInt16 = try await device.readAnalogAbsolute(pin: 0) // millivolts
 
 // Pin-change stream
 let signal = MWGPIOPinChange(pin: 0, type: .any)  // .rising / .falling / .any
-let stream = try await device.stream(signal)
+let stream = try await device.startStream(signal)
 for try await sample in stream {
     print("pin \(sample.value.pin) → \(sample.value.isHigh ? "high" : "low")")
 }
@@ -461,7 +526,7 @@ for try await sample in stream {
 ### Switch / Button (module 0x01)
 
 ```swift
-let stream = try await device.stream(MWSwitch())
+let stream = try await device.startStream(MWSwitch())
 for try await event in stream {
     print(event.value ? "pressed" : "released")
 }
@@ -529,12 +594,10 @@ try await device.removeEvent(event)
 try await device.removeAllEvents()
 ```
 
-**Source → destination data slicing (`MWEventDataToken`)**
+#### Source → destination data slicing (`MWEventDataToken`)
 
-Optional instruction appended to the ENTRY command that tells the firmware to
-copy `length` bytes starting at `sourceOffset` of the source signal's payload
-into the destination command's params starting at `destOffset` when the event
-fires. Without a token the destination params are written as-is.
+Optional instruction appended to the ENTRY command that tells the firmware to copy `length` bytes starting at `sourceOffset` of the source signal's payload into the destination command's params starting at `destOffset` when the event fires.
+Without a token the destination params are written as-is.
 
 ```swift
 // Route 4 bytes from source offset 2 into destination offset 3
@@ -548,7 +611,8 @@ let event = try await device.createEvent(
 
 ### Macro (module 0x0F)
 
-Record a sequence of commands into device flash. Execute manually or automatically on every power-on.
+Record a sequence of commands into device flash. 
+Execute manually or automatically on every power-on.
 
 ```swift
 // Record: set pattern + play (stored in flash)
@@ -575,18 +639,42 @@ try await device.eraseAllMacros()
 
 Commands longer than 13 bytes are split into ADD_PARTIAL + ADD_COMMAND packets automatically.
 
+#### Embedding `createEvent` in a macro
+
+Use the closure-based overload when the macro needs to embed a multi-write
+action — `createEvent(...)` being the primary case. The recorder buffers each
+call's wire bytes and replays them under one BEGIN…END recording session, so
+the firmware re-creates the event binding every time the macro runs.
+
+```swift
+// Bind button → green LED flash, persisted across reboots
+let macro = try await device.recordMacro(executeOnBoot: true) { recorder in
+    await recorder.send(MWLED.SetPattern(color: .green, .flash))
+    await recorder.createEvent(
+        source: .buttonChanged(),
+        action: MWEventAction(command: MWLED.Play())
+    )
+}
+```
+
+`MWMacroRecorder` exposes `send(_: MWCommand)`, `send(_: MWCommandSequence)`,
+`sendRaw(_: Data)`, and `createEvent(source:action:dataToken:)`. Embedded
+events do not return an `MWEvent.id` — the firmware assigns a fresh ID at
+replay time. Use `removeAllEvents()` (or `eraseAllMacros()` to also clear
+persistence) for cleanup.
+
 ### Serial Passthrough — I2C / SPI (module 0x0D)
 
 Communicate with external sensors or ICs wired to the MetaWear's I2C or SPI bus.
 
-**I2C write**
+#### I2C write
 
 ```swift
 // Write 0x00 to register 0x6B of the device at I2C address 0x68 (e.g. wake an MPU-6050)
 try await device.send(MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0x00]))
 ```
 
-**I2C read**
+#### I2C read
 
 ```swift
 // Read 1 byte from register 0x75 (WHO_AM_I) of the device at 0x68
@@ -594,7 +682,7 @@ let bytes = try await device.i2cRead(deviceAddress: 0x68, registerAddress: 0x75,
 print("WHO_AM_I:", bytes.map { String(format: "0x%02X", $0) })
 ```
 
-**SPI write**
+#### SPI write
 
 ```swift
 // Send 0x9F (READ_ID) over SPI at 1 MHz, mode 3, MSB-first
@@ -606,7 +694,7 @@ try await device.send(MWSerial.SPIWrite(
 ))
 ```
 
-**SPI read**
+#### SPI read
 
 ```swift
 // Read 3 bytes from the SPI peripheral (e.g. flash JEDEC ID after sending 0x9F)
@@ -636,7 +724,7 @@ try await device.send(MWiBeacon.Disable())
 The data processor lets you chain on-device signal transforms so the board filters and reduces
 data before it ever reaches your app over BLE.
 
-**Create a processor:**
+#### Create a processor:
 
 ```swift
 // RSS of raw accelerometer — reduces 3-axis to a scalar magnitude
@@ -655,7 +743,7 @@ let threshHandle = try await device.createProcessor(
     source: avgHandle)
 ```
 
-**Stream a processor's output:**
+#### Stream a processor's output:
 
 ```swift
 let stream = try await device.streamProcessor(threshHandle)
@@ -666,7 +754,7 @@ for try await packet in stream {
 }
 ```
 
-**Stop and remove:**
+#### Stop and remove:
 
 ```swift
 try await device.stopStreamingProcessor(threshHandle)
@@ -676,32 +764,109 @@ try await device.removeProcessor(threshHandle)
 try await device.removeAllProcessors()
 ```
 
-**Available processor types:**
+#### Available processor types:
 
-| Type | Class | Output |
-|------|-------|--------|
-| Passthrough | `MWDataProcessor.Passthrough` | Gate — pass all / conditional / count |
-| Accumulator | `MWDataProcessor.Accumulator` | Running sum |
-| Counter | `MWDataProcessor.Counter` | Event count |
-| Average (LPF) | `MWDataProcessor.Average` | Rolling average |
-| RMS combiner | `MWDataProcessor.RMS` | Scalar magnitude (root-mean-square) |
-| RSS combiner | `MWDataProcessor.RSS` | Scalar magnitude (root-sum-square) |
-| Time delay | `MWDataProcessor.Time` | Rate-limited samples (absolute or differential) |
-| Math | `MWDataProcessor.Math` | Arithmetic transform (+ – × ÷ %, shifts, abs, √, etc.) |
-| Sample delay | `MWDataProcessor.Sample` | Burst of N buffered samples |
-| Comparator | `MWDataProcessor.Comparator` | Filter by compare against a reference |
-| Threshold | `MWDataProcessor.Threshold` | Crossing events (absolute or binary ±1) |
-| Delta | `MWDataProcessor.Delta` | Emit when input changes by ≥ magnitude |
-| Pulse | `MWDataProcessor.Pulse` | Detect pulses → emit width / area / peak / on-detect |
-| Buffer | `MWDataProcessor.Buffer` | Hold last sample (read on demand or fused) |
-| Packer | `MWDataProcessor.Packer` | Pack N samples per BLE packet |
-| Accounter | `MWDataProcessor.Accounter` | Prepend timestamp or packet counter |
-| Fuser | `MWDataProcessor.Fuser` | Combine latest primary + buffered secondaries |
+| Type          | Class                         | Output                                                    |
+|---------------|-------------------------------|-----------------------------------------------------------|
+| Passthrough   | `MWDataProcessor.Passthrough` | Gate — pass all / conditional / count                     |
+| Accumulator   | `MWDataProcessor.Accumulator` | Running sum                                               |
+| Counter       | `MWDataProcessor.Counter`     | Event count                                               |
+| Average (LPF) | `MWDataProcessor.Average`     | Rolling average                                           |
+| RMS combiner  | `MWDataProcessor.RMS`         | Scalar magnitude (root-mean-square)                       |
+| RSS combiner  | `MWDataProcessor.RSS`         | Scalar magnitude (root-sum-square)                        | 
+| Time delay    | `MWDataProcessor.Time`        | Rate-limited samples (absolute or differential)           |
+| Math          | `MWDataProcessor.Math`        | Arithmetic transform (+ – × ÷ %, shifts, abs, √, etc.)    |
+| Sample delay  | `MWDataProcessor.Sample`      | Burst of N buffered samples                               |
+| Comparator    | `MWDataProcessor.Comparator`  | Filter by compare against a reference                     |
+| Threshold     | `MWDataProcessor.Threshold`   | Crossing events (absolute or binary ±1)                   |
+| Delta         | `MWDataProcessor.Delta`       | Emit when input changes by ≥ magnitude                    |
+| Pulse         | `MWDataProcessor.Pulse`       | Detect pulses → emit width / area / peak / on-detect      |
+| Buffer        | `MWDataProcessor.Buffer`      | Hold last sample (read on demand or fused)                |
+| Packer        | `MWDataProcessor.Packer`      | Pack N samples per BLE packet                             |
+| Accounter     | `MWDataProcessor.Accounter`   | Prepend timestamp or packet counter                       |
+| Fuser         | `MWDataProcessor.Fuser`       | Combine latest primary + buffered secondaries             |
 
-**Chaining** — `MWProcessorHandle` conforms to `MWSignal`, so any processor's output can feed
-directly into the next `createProcessor` call. The handle carries the board-assigned ID plus
-the output channel count, channel width, and signedness so the next stage's config bytes are
-computed correctly without any manual bookkeeping.
+Chaining — `MWProcessorHandle` conforms to `MWSignal`, so any processor's output can feed directly into the next `createProcessor` call. 
+The handle carries the board-assigned ID plus the output channel count, channel width, and signedness so the next stage's config bytes are computed correctly without any manual bookkeeping.
+
+#### Recipes
+
+Common processor chains. Each recipe lists how many on-device processor slots
+it consumes (the board has a fixed pool — typically 28).
+
+**Fire on every Nth event** — count, take mod N, compare. Pair two comparators
+sharing the modulo output to split a stream into N classes (e.g. odd/even).
+
+```swift
+// Bind switch presses
+let pressed = try await device.createProcessor(
+    MWDataProcessor.Comparator(operation: .eq, reference: 1, signed: false),
+    source: MWSwitchSignal())                                      // slot 1
+
+// Counter → Math(% N) → two Comparators
+let counter = try await device.createProcessor(
+    MWDataProcessor.Counter(outputSize: 1), source: pressed)        // slot 2
+let modN = try await device.createProcessor(
+    MWDataProcessor.Math(operation: .modulo, rhs: 2,
+                         signed: false, outputSize: 1),
+    source: counter)                                                // slot 3
+let isEven = try await device.createProcessor(
+    MWDataProcessor.Comparator(operation: .eq, reference: 0,
+                               signed: false), source: modN)         // slot 4
+let isOdd  = try await device.createProcessor(
+    MWDataProcessor.Comparator(operation: .eq, reference: 1,
+                               signed: false), source: modN)         // slot 5
+
+// `isEven` / `isOdd` now act as event sources. Bind each with `createEvent`.
+```
+
+Slot cost: 5 (or 4 if you only need one of odd/even, or 3 if you don't need the
+press-edge filter and the source already gives you a single-sample-per-event signal).
+
+**Activity gate (magnitude crosses threshold)** — reduce 3-axis to scalar, then
+threshold or compare. Useful for activity / freefall / impact detection without
+streaming raw axes.
+
+```swift
+let mag = try await device.createProcessor(
+    MWDataProcessor.RSS(),
+    source: MWAccelerometerSignal())                                // slot 1
+let active = try await device.createProcessor(
+    MWDataProcessor.Threshold(boundary: 8192,        // 0.5 g at ±2 g range
+                              hysteresis: 0,
+                              mode: .binary,
+                              signed: false),
+    source: mag)                                                    // slot 2
+// `active` emits +1 on rising edge, –1 on falling edge.
+```
+
+Slot cost: 2. Bind `active` as an event source to drive an LED, or feed into
+`startLogging(_:key:)` (see [Logging a processor handle](#logging-a-processor-handle))
+to record activity transitions to flash.
+
+**Throttle a high-rate signal before logging** — Time(absolute) takes one
+sample per period. Pairs naturally with the processor-handle logging API.
+
+```swift
+let euler = MWSensorFusionEuler(mode: .ndof, chip: .bmi270)
+try await device.prepareSignalSource(euler)
+let throttle = try await device.createProcessor(
+    MWDataProcessor.Time(periodMs: 1000, mode: .absolute),
+    source: MWSensorFusionEulerSignal())                            // slot 1
+try await device.startLogging(throttle, key: "euler-1hz")
+// ... time passes ...
+try await device.stopLogging(key: "euler-1hz")
+try await device.teardownSignalSource(euler)
+```
+
+Slot cost: 1. `mode: .differential` outputs the *delta* between successive
+periods instead of a raw sample — handy for derivative-style telemetry.
+
+> Cleanup: chains hold each processor's slot until you call
+> `device.removeProcessor(_:)` (or `removeAllProcessors()`). Events bound to a
+> processor must be torn down first (`removeAllEvents()`) — events reference
+> processors, processors reference each other, and the firmware will reject a
+> remove that has live downstream consumers.
 
 ---
 
@@ -711,6 +876,18 @@ computed correctly without any manual bookkeeping.
 try await device.send(MWSettings.SetDeviceName("MySensor"))                  // max 26 ASCII bytes (truncates)
 try await device.send(MWSettings.SetDeviceName(validating: "MySensor"))      // throws on invalid chars / length
 try await device.send(MWSettings.SetTXPower(.minus4))        // BLE TX power
+```
+
+**Verifying a device-name change.** The firmware exposes `SetDeviceName` (register 0x11/0x01) as a write-only opcode — there is no protocol read-back. The standard GAP `Device Name` characteristic (0x2A00) is also unusable: Apple's CoreBluetooth filters services 0x1800 / 0x1801 out of discovery on iOS and macOS. To confirm a rename took effect you must disconnect and observe the next advertisement:
+
+```swift
+try await device.send(MWSettings.SetDeviceName("MySensor"))
+try await device.disconnect()
+try await Task.sleep(for: .milliseconds(500))          // let the radio resume advertising
+
+scanner.clearAdvertisedName(for: device.identifier)     // discard pre-rename cache
+scanner.startScan()
+// poll scanner.advertisedNames[device.identifier] ...
 ```
 
 ### Debug (module 0xFE)
@@ -747,9 +924,8 @@ try await device.clearLog()
 
 ### Flushing the last log page (MMS only)
 
-MetaMotion S boards (logging revision ≥ 3) buffer the final partial flash page
-in RAM. Call `flushLogPage()` to force that buffer to flash before downloading
-— without it, the last few seconds of samples may be missing from the download.
+MetaMotion S boards (logging revision ≥ 3) buffer the final partial flash page in RAM. 
+Call `flushLogPage()` to force that buffer to flash before downloading — without it, the last few seconds of samples may be missing from the download.
 On older boards the call is a no-op and returns `false`.
 
 ```swift
@@ -760,7 +936,8 @@ let stream  = try await device.downloadLogs(sensor)
 
 ### CSV export
 
-Any array of logged or streamed samples can be converted to a `MWDataTable` and exported as CSV. All sensor sample types (`CartesianFloat`, `Quaternion`, `EulerAngles`, `Float`, `Bool`, `CorrectedCartesianFloat`) conform to `MWDataConvertible` automatically.
+Any array of logged or streamed samples can be converted to a `MWDataTable` and exported as CSV. 
+All sensor sample types (`CartesianFloat`, `Quaternion`, `EulerAngles`, `Float`, `Bool`, `CorrectedCartesianFloat`) conform to `MWDataConvertible` automatically.
 
 ```swift
 // From logged samples
@@ -787,23 +964,23 @@ print("Accel: \(cal.accelerometer)  Gyro: \(cal.gyroscope)  Mag: \(cal.magnetome
 ```swift
 // Picks BMI160 or BMI270 based on module info read during connect()
 if let acc = await device.makeAccelerometer(odrHz: 100, rangeG: 2) {
-    // use acc with device.stream(_:) or device.startLogging(_:)
+    // use acc with device.startStream(_:) or device.startLogging(_:)
 }
 ```
 
 ### Log time anchor
 
-During `connect()`, the SDK reads the board's current log tick and converts it to a wall-clock `Date`. Downloaded `MWLoggedSample` values carry both a `.date` (wall clock) and a `.tickMs` (ms since device reset).
+During `connect()`, the SDK reads the board's current log tick and converts it to a wall-clock `Date`.
+Downloaded `MWLoggedSample` values carry both a `.date` (wall clock) and a `.tickMs` (ms since device reset).
 
 ### Logger registry across reconnects
 
-Logger subscriptions survive an unexpected BLE disconnect. On reconnect the device retains the same logger IDs. Call `recoverLoggers(for:)` after reconnect if you didn't call `clearLog()` before disconnecting.
+Logger subscriptions survive an unexpected BLE disconnect. On reconnect the device retains the same logger IDs.
+Call `recoverLoggers(for:)` after reconnect if you didn't call `clearLog()` before disconnecting.
 
 ### Board state capture / restore
 
-After a full `connect()` handshake you can persist the discovered module table and log time
-anchor, then skip re-discovery on subsequent reconnects when firmware / hardware revisions
-still match.
+After a full `connect()` handshake you can persist the discovered module table and log time anchor, then skip re-discovery on subsequent reconnects when firmware / hardware revisions still match.
 
 ```swift
 // After connect(), snapshot current state
@@ -841,12 +1018,124 @@ for sig in signals {
 //       Output = .cartesian | .scalar | .quaternion | .euler | .correctedCartesian
 ```
 
-Wiring downloaded log entries into a signal's decode closure means grouping
-`RawLogEntry.rawData` bytes by `loggerIDs` and feeding each group as `Data` to
-`decode`. See `MWAnonymousSignalTests` for the exact byte layout per signal type.
+Wiring downloaded log entries into a signal's decode closure means grouping `RawLogEntry.rawData` bytes by `loggerIDs` and feeding each group as `Data` to `decode`. 
+See `MWAnonymousSignalTests` for the exact byte layout per signal type.
 
-Scale factors (accel / gyro range) are read from the live board at call time — if you
-change range afterward, call `createAnonymousDataSignals()` again.
+Scale factors (accel / gyro range) are read from the live board at call time — if you change range afterward, call `createAnonymousDataSignals()` again.
+
+### Logging a processor handle
+
+The typed `startLogging(_:)` overload is sensor-shaped — it reads
+`MWLoggable.logDataChunks` and parses samples back via `parseLogSample`.
+For the output of a data-processor chain (throttle, RMS, accumulator, fuser, …)
+the SDK exposes a key-based overload that takes the `MWProcessorHandle` directly
+and lets you supply your own decoder at download time:
+
+```swift
+// Throttle 100 Hz Euler fusion down to 1 Hz, log 10 s, then download.
+let euler = MWSensorFusionEuler(mode: .ndof, chip: .bmi270)
+try await device.prepareSignalSource(euler)              // configure + start the source
+let throttle = try await device.createProcessor(
+    MWDataProcessor.Time(periodMs: 1000, mode: .absolute),
+    source: MWSensorFusionEulerSignal()
+)
+let key = "euler-throttle-1hz"
+try await device.startLogging(throttle, key: key)
+try await Task.sleep(for: .seconds(10))
+try await device.stopLogging(key: key)
+try await device.teardownSignalSource(euler)            // stop + disable the source
+_ = try await device.flushLogPage()                     // MMS only
+
+let stream = try await device.downloadLogs(key: key) { data in
+    try euler.parseLogSample(from: data)                // any (Data) throws -> S decoder
+}
+for try await progress in stream {
+    print(progress.percentComplete, progress.data.count, "samples")
+}
+```
+
+What's going on:
+
+- `prepareSignalSource(_:)` / `teardownSignalSource(_:)` run the sensor's
+  `configure → enable → start` (and the inverse) without subscribing to live
+  output and without flipping the device into `.streaming`. This is the
+  primitive you want whenever a sensor only feeds an on-board processor.
+- `startLogging(_:key:)` issues one `[0x0B, 0x02, 0x09, 0x03, proc_id, packed]`
+  subscribe per ≤4-byte chunk of the processor's output, registers the
+  resulting logger IDs under `key`, and transitions the device to `.logging`.
+- `downloadLogs(key:decode:)` reassembles entries by logger-ID order and
+  hands each reconstructed payload to your decoder.
+
+Sensor-fusion outputs are exposed as `MWSignal` values for use as processor
+sources: `MWSensorFusionEulerSignal`, `MWSensorFusionQuaternionSignal`,
+`MWSensorFusionGravitySignal`, `MWSensorFusionLinearAccelerationSignal`.
+
+---
+
+## Persistence (SwiftData)
+
+The `MetaWearPersistence` library is a separate SwiftPM product that stores downloaded log sessions in SwiftData. It targets iOS 17 / macOS 14 (the same platforms as the core SDK) and ships its own test target (`MetaWearPersistenceTests`).
+
+```swift
+// Package.swift
+.target(name: "MyApp", dependencies: ["MetaWear", "MetaWearPersistence"])
+```
+
+### One container per app, one store per call site
+
+```swift
+import MetaWear
+import MetaWearPersistence
+
+let container = try MWPersistenceStore.makeContainer()       // .makeContainer(inMemory: true) for previews / tests
+let store     = MWPersistenceStore(modelContainer: container)
+```
+
+`MWPersistenceStore` is `@ModelActor` — a SwiftData-aware actor that pins a `ModelContext` to its serial executor. All store methods are `async`.
+
+### Save a download session
+
+```swift
+let samples = try await collectAllSamples(from: device.downloadLogs(sensor))   // your code
+
+let snapshot = try await store.saveSession(
+    deviceID:     device.identifier,
+    deviceInfo:   device.deviceInfo!,
+    sensorKind:   CartesianFloat.persistenceKind,            // "cartesian"
+    samples:      samples
+)
+print("Saved session", snapshot.id, "with \(snapshot.sampleCount) samples")
+```
+
+`MWSessionSnapshot` is a plain `Sendable` value — safe to hand to SwiftUI views or pass across actor boundaries. The matching `@Model` types (`MWSessionRecord`, `MWSampleRecord`) stay inside the store.
+
+### Fetch / reconstruct / export
+
+```swift
+// All sessions for one device, newest first
+let sessions = try await store.fetchSessions(deviceID: device.identifier)
+
+// Rehydrate typed samples
+let acceleration = try await store.fetchSamples(sessionID: snapshot.id, as: CartesianFloat.self)
+
+// One-step CSV
+let table = try await store.exportTable(sessionID: snapshot.id, as: CartesianFloat.self)
+try table.writeCSV(to: URL(fileURLWithPath: "/tmp/session.csv"))
+```
+
+`fetchSamples` and `exportTable` validate that the session's `sensorKind` matches the requested type and throw `MWPersistenceError.kindMismatch` otherwise.
+
+### Delete
+
+```swift
+try await store.deleteSession(id: snapshot.id)
+try await store.deleteAllSessions(for: device.identifier)
+try await store.deleteAll()
+```
+
+### Supported sample types
+
+`MWPersistable` is a small protocol that pairs a `persistenceKind` discriminator with a flat `(f0, f1, f2, f3, accuracy)` packing. Retroactive conformances ship for every SDK sample type — `Float`, `Bool`, `CartesianFloat`, `CorrectedCartesianFloat`, `Quaternion`, `EulerAngles`. Adding a new sensor type means adding one extension block in `MWPersistableConformances.swift`.
 
 ---
 
@@ -854,7 +1143,8 @@ change range afterward, call `createAnonymousDataSignals()` again.
 
 ### Streaming (live)
 
-BLE delivers data as fast as the connection interval allows (~100 Hz practical max). Packed mode sends 3 samples per BLE packet, tripling effective throughput for IMU sensors.
+BLE delivers data as fast as the connection interval allows (~100 Hz practical max).
+Packed mode sends 3 samples per BLE packet, tripling effective throughput for IMU sensors.
 
 ```
 MetaWear → BLE notifications (packed, ~33/sec at 100Hz)
@@ -864,7 +1154,8 @@ MetaWear → BLE notifications (packed, ~33/sec at 100Hz)
 
 ### Logging (on-device flash)
 
-Sensors log to NAND flash at up to 800+ Hz independent of BLE. Download when done.
+Sensors log to NAND flash at up to 800+ Hz independent of BLE. 
+Download when done.
 
 ```
 MetaWear flash → BLE burst download
@@ -918,36 +1209,47 @@ Module IDs:
 swift test
 # or target a specific suite:
 swift test --filter MWTimer
+swift test --filter MetaWearPersistenceTests
 ```
 
-~795 `@Test` cases across 24 test files — all run without hardware using `MockBLETransport`:
+Three test targets ship with the package:
 
-| Suite file | What it covers |
-|---|---|
-| `MWPacketParserTests` | Raw byte → Swift type parsing for all sensors |
-| `MWModuleCommandTests` | Every sensor/module builds correct command bytes |
-| `MWLEDTests` | LED pattern bytes, preset validation |
-| `MWSwitchHapticTests` | Switch stream, haptic pulse bytes |
-| `MWDebugTemperatureTests` | Debug command bytes, temperature read |
-| `MWProtocolLayerTests` | Notification routing, module discovery, concurrent reads |
-| `MetaWearDeviceTests` | State machine, connect/disconnect, streaming/logging guards |
-| `MWLoggingTests` | startLogging commands, RawLogEntry parsing, chunk config, clearLog |
-| `MWLogFinishingTests` | Log time anchor, registry persistence, anonymous logger recovery |
-| `MWGPIOLEDTests` | GPIO output commands, one-shot reads, pin-change stream, multi-channel LED |
-| `MWTimerTests` | Timer create/start/stop/remove, tick stream, period encoding |
-| `MWEventTests` | Event source constructors, createEvent command format, remove |
-| `MWMacroTests` | recordMacro, ADD_PARTIAL for long commands, execute, erase |
-| `MWSerialTests` | I2C / SPI write + read command bytes, response parsing |
-| `MWiBeaconTests` | iBeacon UUID / major / minor / TX power / period / enable bytes |
-| `MWDataProcessorTests` | ADD command bytes and config bits for all 17 processor types |
-| `MWDataTableTests` | CSV table construction and export for streamed + logged samples |
-| `MWModelTests` | MetaWear model detection from firmware/hardware revision strings |
-| `MWSensorFusionLoggingTests` | Sensor fusion log configuration, calibration read, download |
-| `MWAmbientLightTests` | LTR329 config bytes, lux conversion |
-| `MWHumidityTests` | BME280 humidity read command + oversampling config |
-| `MWBoardStateTests` | Capture / restore of discovered modules, Codable round-trip |
-| `MWAnonymousSignalTests` | Reconstruction of unknown loggers from board state, chunk partitioning |
-| `MWProductionGapTests` | Concurrent reads, multi-sensor streaming, reconnect, device-name validation |
+- **`MetaWearTests`** — ~896 `@Test` cases across 28 files. The full SDK surface, run against `MockBLETransport`. No hardware required.
+- **`MetaWearPersistenceTests`** — 42 `@Test` cases across 3 files (`MWPersistableConformanceTests`, `MWPersistenceStoreTests`, `MWSessionExportTests`). In-memory SwiftData container — no hardware, no on-disk side effects.
+- **`MetaWearHardwareTests`** — see [Hardware integration tests](#hardware-integration-tests). Real MetaWear required, run from the Xcode project.
+
+`MetaWearTests` covers (one row per file, ordered roughly by dependency):
+
+| Suite file                    | What it covers                                                                |
+|-------------------------------|-------------------------------------------------------------------------------|
+| `MWPacketParserTests`         | Raw byte → Swift type parsing for all sensors                                 |
+| `MWModuleCommandTests`        | Every sensor/module builds correct command bytes                              |
+| `MWAccelerometerBMI160Tests`  | BMI160 config bytes, parse vectors, step counter / detector commands          |
+| `MWLEDTests`                  | LED pattern bytes, preset validation                                          |
+| `MWSwitchHapticTests`         | Switch stream, haptic pulse bytes                                             |
+| `MWDebugTemperatureTests`     | Debug command bytes, temperature read                                         |
+| `MWProtocolLayerTests`        | Notification routing, module discovery, concurrent reads                      |
+| `MetaWearDeviceTests`         | State machine, connect/disconnect, streaming/logging guards                   |
+| `MWFactoryResetTests`         | factoryReset() seven-write sequence, post-reset state transition              |
+| `MWGenericReadPollTests`      | Generic `device.read(_:)` and `device.poll(_:every:)` for `MWReadable` / `MWPollable` |
+| `MWMiscReadablesTests`        | `MWLogLength`, `MWLastResetTime`, `MWMACAddress` shape + parsing, `MWPollable` conformances |
+| `MWLoggingTests`              | startLogging commands, RawLogEntry parsing, chunk config, clearLog            |
+| `MWLogFinishingTests`         | Log time anchor, registry persistence, anonymous logger recovery              |
+| `MWGPIOLEDTests`              | GPIO output commands, one-shot reads, pin-change stream, multi-channel LED    |
+| `MWTimerTests`                | Timer create/start/stop/remove, tick stream, period encoding                  |
+| `MWEventTests`                | Event source constructors, createEvent command format, remove                 |
+| `MWMacroTests`                | recordMacro, ADD_PARTIAL for long commands, execute, erase                    |
+| `MWSerialTests`               | I2C / SPI write + read command bytes, response parsing                        |
+| `MWiBeaconTests`              | iBeacon UUID / major / minor / TX power / period / enable bytes               |
+| `MWDataProcessorTests`        | ADD command bytes and config bits for all 17 processor types                  |
+| `MWDataTableTests`            | CSV table construction and export for streamed + logged samples               |
+| `MWModelTests`                | MetaWear model detection from firmware/hardware revision strings              |
+| `MWSensorFusionLoggingTests`  | Sensor fusion log configuration, calibration read, download                   |
+| `MWAmbientLightTests`         | LTR329 config bytes, lux conversion                                           |
+| `MWHumidityTests`             | BME280 humidity read command + oversampling config                            |
+| `MWBoardStateTests`           | Capture / restore of discovered modules, Codable round-trip                   |
+| `MWAnonymousSignalTests`      | Reconstruction of unknown loggers from board state, chunk partitioning        |
+| `MWProductionGapTests`        | Concurrent reads, multi-sensor streaming, reconnect, device-name validation   |
 
 ### MockBLETransport
 
@@ -968,7 +1270,8 @@ let cmds = await transport.writtenCommands  // [Data]
 
 Hardware tests require a real MetaWear nearby. They live in a separate Xcode project that provides a proper macOS app test host — required for CoreBluetooth to work with macOS privacy permissions.
 
-**Open the project:**
+#### Open the project:
+
 ```
 Tests/IntegrationTests/MetaWearTestHost.xcodeproj
 ```
@@ -984,21 +1287,46 @@ If no device is found within the 10-second scan window, all hardware tests **fai
 
 Modules that are not present on the connected board (e.g. barometer on a board without one) are skipped gracefully within each test.
 
-Hardware test suites:
+Hardware test suites — 36 `@Suite` blocks across 26 files:
 
-| Suite | What it covers |
-|---|---|
-| `Bluetooth — Smoke` | Bluetooth hardware present and powered on, MetaWear discoverable |
-| `Hardware — Connectivity` | device info, battery, module presence, reconnect |
-| `Hardware — LED & Haptic` | green/red/blue flash, breathe, solid white, multi-channel, clear pattern, motor + buzzer haptic |
-| `Hardware — Sensor Streaming` | accelerometer (BMI160 + BMI270) sample count + magnitude, gyroscope (BMI160 + BMI270), switch stream |
-| `Hardware — Environment Sensors` | temperature (NRF die + Bosch), barometer pressure, altimeter, magnetometer |
-| `Hardware — Sensor Fusion` | quaternion unit magnitude, Euler angle range, gravity vector ~1 g, linear acceleration ~0 at rest |
-| `Hardware — GPIO & Settings` | digital read (pull-up/down), analog ADC + absolute, pin-change stream, device name, TX power, connection parameters |
-| `Hardware — Timer & Event` | tick stream, stop prevents ticks, event → LED binding |
-| `Hardware — Macro` | record + execute, multi-command, erase all |
-| `Hardware — Logging` | accelerometer + gyroscope log/download for BMI160 and BMI270, clearLog |
-| `Hardware — Serial (I2C / SPI)` | module presence, I2C write, I2C read (WHO_AM_I probe), SPI write, SPI read |
+| Suite                                         | What it covers                                                                                                              |
+|-----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `Bluetooth — Smoke`                           | Bluetooth hardware present and powered on, MetaWear discoverable                                                            |
+| `Hardware — Connectivity`                     | Device info, battery, module presence                                                                                       |
+| `Hardware — Device Connection Lifecycle`      | connect / disconnect / reconnect, state transitions, scanner-vended pending-connect cancellation                            |
+| `Hardware — LED`                              | Single-channel patterns (blink, breathe, solid, flash), stop / clear                                                        |
+| `Hardware — Haptic`                           | Motor pulse, max duty cycle, buzzer pulse                                                                                   |
+| `Hardware — Accelerometer`                    | High-level streaming smoke for the auto-detected accelerometer (ODR snap, range, packed default)                            |
+| `BMI160 — Acceleration Data`                  | BMI160 raw register: per-config wire bytes, parse vectors, range / ODR encoding                                             |
+| `BMI160 — Packed Acceleration Data`           | BMI160 packed register: 3-sample-per-packet, sample-count over a fixed window                                               |
+| `BMI270 — Acceleration Data`                  | BMI270 raw register: parity with the BMI160 cases                                                                           |
+| `BMI270 — Packed Acceleration Data`           | BMI270 packed register: parity with the BMI160 packed cases                                                                 |
+| `BMI160 — Gyroscope Data`                     | BMI160 raw gyro register, range / ODR encoding                                                                              |
+| `BMI160 — Packed Gyroscope Data`              | BMI160 packed gyro register, sample-count over a fixed window                                                               |
+| `BMI270 — Gyroscope Data`                     | BMI270 raw gyro register: parity with the BMI160 cases                                                                      |
+| `BMI270 — Packed Gyroscope Data`              | BMI270 packed gyro register: parity with the BMI160 packed cases                                                            |
+| `Magnetometer — Magnetic-Field Data`          | BMM150 raw register, preset-driven ODR (skips on boards without BMM150)                                                     |
+| `Magnetometer — Packed Magnetic-Field Data`   | BMM150 packed register                                                                                                      |
+| `Magnetometer — Suspend`                      | Suspend / wakeup register, post-resume sample shape                                                                         |
+| `Hardware — Environment Sensors`              | Temperature (NRF die + BMP280 + preset thermistor, dynamic channel lookup), barometer pressure, altimeter, humidity (skip on non-BME) |
+| `Sensor Fusion — Quaternion`                  | Quaternion unit magnitude across NDoF / IMU+ modes                                                                          |
+| `Sensor Fusion — Euler Angles`                | Heading / pitch / roll / yaw range + finite                                                                                 |
+| `Sensor Fusion — Gravity`                     | Gravity vector ~ 1 g at rest                                                                                                |
+| `Sensor Fusion — Linear Acceleration`         | Linear acceleration ~ 0 at rest                                                                                             |
+| `Sensor Fusion — Calibration`                 | Calibration state read on a running fusion stream                                                                           |
+| `Hardware — GPIO`                             | Digital read with pull-up / pull-down, analog ADC + absolute, pin-change stream                                             |
+| `Hardware — Switch`                           | Stream lifecycle, press / release events in a listen window                                                                 |
+| `Hardware — Settings`                         | Device name set / restore (verified via rescan of advertised name), TX power (verified via RSSI delta), connection parameters, start advertising |
+| `Hardware — iBeacon`                          | Enable / disable full iBeacon profile (UUID, major / minor, RX / TX power, period)                                          |
+| `Hardware — Events`                           | removeAll smoke; button → LED event; processor chain → alternating LED on odd / even presses                                |
+| `Hardware — Commands`                         | powerDownSensors equivalent; LED variants (purple breathe, orange flash, green fast / blue infrequent / red raised-low blink, yellow solid → off) |
+| `Hardware — Macro`                            | Record + execute, multi-command body, erase all                                                                             |
+| `Hardware — Reads`                            | Generic `device.read(_:)` round-trip for every `MWReadable` (temperature channels, battery, last reset time, log length, humidity, MAC) |
+| `Hardware — Streams (legacy parity)`          | Legacy SDK stream-test parity (ambient light, charging-status poll, motion / orientation / step detectors, sensor-fusion sweep) |
+| `Hardware — Logging`                          | Accelerometer + gyroscope log / download for BMI160 + BMI270, clearLog                                                      |
+| `Sensor Fusion — Logging`                     | Sensor fusion log / download (quaternion, Euler angles, gravity, linear acceleration)                                       |
+| `Hardware — Factory Reset`                    | factoryReset advances reset UID, restores defaults, reconnect after reboot, post-reset flash state cleared                  |
+| `Hardware — Serial (I2C / SPI)`               | Module presence, I2C write, I2C read (WHO_AM_I probe), SPI write, SPI read                                                  |
 
 ---
 
@@ -1012,7 +1340,8 @@ swift run MetaWearDemo
 
 On first run macOS will prompt for Bluetooth permission — grant it once and it's remembered.
 
-**What the demo does:**
+#### What the demo does:
+
 1. Scans 8 seconds and lists found devices
 2. Connects to the first device found
 3. Prints firmware, model, serial, hardware revision
@@ -1033,14 +1362,24 @@ Full byte-level specification — every module opcode, register, command byte la
 /Users/kasso/Documents/MetaWear-API/docs/protocol-reference.md
 ```
 
-Extracted from [MetaWear-SDK-Cpp](https://github.com/mbientlab/MetaWear-SDK-Cpp). Run `mkdocs serve` in that directory to browse as a formatted site.
+Run `mkdocs serve` in that directory to browse as a formatted site.
 
 ---
 
 ## What's not yet implemented
 
-| Feature | Notes |
-|---|---|
-| SwiftUI app target | Scan list, connect screen, live Swift Charts graph |
-| SwiftData persistence | Store downloaded log entries across sessions |
-| DFU (firmware update) | Requires Nordic DFU library |
+### Known small SDK gaps (deferred from legacy parity)
+
+| Gap | Blocks | Workaround |
+|---|---|---|
+| `MWChargingStatus` not exposed as `MWLoggable` | Persisting charge transitions to flash | `device.poll(MWSettings.ReadChargeStatus(), every:)` covers the live-observation case. |
+
+> Resolved: macros can now embed `createEvent(...)` via the closure-form
+> `recordMacro(executeOnBoot:_:)` (see [Macros](#macros)). The previously-deferred
+> legacy test `test_MacroEventRecording_LEDFlashOnButtonUpDown` ports cleanly to
+> `EventTests.macro_buttonChanged_flashesLED_persistsViaMacro`.
+
+> Resolved: `startLogging` now accepts an `MWProcessorHandle` via the
+> `(handle:key:)` overload (see [Logging a processor handle](#logging-a-processor-handle)).
+> The previously-deferred legacy tests `test_EventTimeThrottling_SlowSensorFusion_Download_*`
+> port to `EventTests.throttledFusion_logsAtOneHz_downloads`.

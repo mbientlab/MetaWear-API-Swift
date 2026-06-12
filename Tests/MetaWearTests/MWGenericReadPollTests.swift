@@ -20,16 +20,23 @@ private func makeConnectableTransport() async -> MockBLETransport {
 }
 
 private func autoReplyModuleDiscovery(transport: MockBLETransport) -> Task<Void, Never> {
+    // Continuously poll — see MetaWearDeviceTests for the rationale on why a
+    // one-shot sleep is racy under parallel-test load.
     Task {
-        try? await Task.sleep(nanoseconds: 15_000_000)
-        let written = await transport.writtenData
-        for (cmd, _, _) in written {
-            guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
-            let moduleId = cmd[0]
-            let present: Set<UInt8> = [0x03, 0x13, 0x12, 0x15, 0x19, 0x0B, 0x11, 0x16]
-            let impl: UInt8 = present.contains(moduleId) ? 0x01 : 0xFF
-            await transport.inject(notification: Data([moduleId, 0x80, impl, 0x00]),
-                                   to: MWUUIDs.notify)
+        var responded = Set<Data>()
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 3_000_000)
+            let written = await transport.writtenData
+            for (cmd, _, _) in written {
+                guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
+                guard !responded.contains(cmd) else { continue }
+                responded.insert(cmd)
+                let moduleId = cmd[0]
+                let present: Set<UInt8> = [0x03, 0x13, 0x12, 0x15, 0x19, 0x0B, 0x11, 0x16]
+                let impl: UInt8 = present.contains(moduleId) ? 0x01 : 0xFF
+                await transport.inject(notification: Data([moduleId, 0x80, impl, 0x00]),
+                                       to: MWUUIDs.notify)
+            }
         }
     }
 }

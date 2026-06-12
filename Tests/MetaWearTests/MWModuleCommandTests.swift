@@ -350,16 +350,32 @@ struct AccBMI270PythonVectorTests {
         #expect(MWAccelerometerBMI270Steps.stepRegister == 0x0B)
     }
 
+    @Test func stepDetector_subscribeCommand() {
+        // subscribe sends [0x03, 0x0B, 0x01]
+        let cmd = MWPacket.command(.accelerometer, MWAccelerometerBMI270Steps.stepRegister, 0x01)
+        #expect(cmd == Data([0x03, 0x0B, 0x01]))
+    }
+
     @Test func stepDetector_enable() {
         // Python test_enable_detector: [0x03, 0x06, 0x80, 0x00]
         let cmd = MWAccelerometerBMI270Steps.EnableStepDetector()
         #expect(cmd.featureEnableCommand == Data([0x03, 0x06, 0x80, 0x00]))
     }
 
+    @Test func stepDetector_enable_interruptEnable() {
+        let cmd = MWAccelerometerBMI270Steps.EnableStepDetector()
+        #expect(cmd.interruptEnableCommand == Data([0x03, 0x07, 0x80, 0x00]))
+    }
+
     @Test func stepDetector_disable() {
         // Python test_disable_detector: [0x03, 0x06, 0x00, 0x80]
         let cmd = MWAccelerometerBMI270Steps.DisableStepDetector()
         #expect(cmd.featureDisableCommand == Data([0x03, 0x06, 0x00, 0x80]))
+    }
+
+    @Test func stepDetector_disable_interruptDisable() {
+        let cmd = MWAccelerometerBMI270Steps.DisableStepDetector()
+        #expect(cmd.interruptDisableCommand == Data([0x03, 0x07, 0x00, 0x80]))
     }
 
     @Test func stepDetector_parseDetection_zero() throws {
@@ -592,6 +608,35 @@ struct BMI270FeatureCommandTests {
         let cmd = MWAccelerometerBMI270Features.DisableNoMotion()
         #expect(cmd.interruptDisableCommand == Data([0x03, 0x07, 0x00, 0x20]))
         #expect(cmd.featureDisableCommand   == Data([0x03, 0x06, 0x00, 0x20]))
+    }
+
+    // MARK: Significant motion
+
+    @Test func sigMotion_configure_defaultBlocksize() {
+        // blocksize default = 250 (0x00FA) → lo=0xFA hi=0x00
+        // FEATURE_CONFIG index for sig_motion = 3
+        let cfg = MWAccelerometerBMI270Features.ConfigureSignificantMotion()
+        #expect(cfg.commandData == Data([0x03, 0x08, 0x03, 0xFA, 0x00]))
+    }
+
+    @Test func sigMotion_configure_largeBlocksize() {
+        // 0x1234 → lo=0x34 hi=0x12
+        let cfg = MWAccelerometerBMI270Features
+            .ConfigureSignificantMotion(blocksize: 0x1234)
+        #expect(cfg.commandData == Data([0x03, 0x08, 0x03, 0x34, 0x12]))
+    }
+
+    @Test func sigMotion_enable() {
+        // FEATURE_ENABLE / FEATURE_INTERRUPT_ENABLE bit 0x01.
+        let cmd = MWAccelerometerBMI270Features.EnableSignificantMotion()
+        #expect(cmd.interruptEnableCommand == Data([0x03, 0x07, 0x01, 0x00]))
+        #expect(cmd.featureEnableCommand   == Data([0x03, 0x06, 0x01, 0x00]))
+    }
+
+    @Test func sigMotion_disable() {
+        let cmd = MWAccelerometerBMI270Features.DisableSignificantMotion()
+        #expect(cmd.interruptDisableCommand == Data([0x03, 0x07, 0x00, 0x01]))
+        #expect(cmd.featureDisableCommand   == Data([0x03, 0x06, 0x00, 0x01]))
     }
 
     // MARK: Downsampling
@@ -1293,6 +1338,397 @@ struct SensorFusionDataHandlerTests {
     }
 }
 
+// MARK: - Sensor fusion lifecycle (start / stop sequences)
+//
+// Reference: MetaWear-SDK-Cpp/test/test_sensor_fusion.py::test_sensor_control.
+// The C++ test asserts that start + stop produces a fixed byte sequence per mode,
+// with the OUTPUT_ENABLE byte (`[0x19, 0x03, mask, 0x00]`) carrying the bit for
+// whichever signal was enabled. Our SDK splits this across four properties:
+//   configureCommands → fusion.config + underlying acc/gyro/mag configs
+//   enableCommands    → underlying enable_sampling commands
+//   startCommands     → underlying start + fusion.enable_mask + fusion.start
+//   stopCommands      → fusion.stop + fusion.clear_mask + underlying stops
+//   disableCommands   → underlying disable_sampling commands
+// The concatenation of these four arrays (in start/stop order) must equal the
+// 8-command (or 6-command for sensor-light modes) sequence the Python test asserts.
+
+@Suite("Sensor Fusion Lifecycle (BMI160)")
+struct SensorFusionLifecycleBMI160Tests {
+
+    // MARK: NDOF — acc + gyro + mag (8 start commands, 8 stop commands)
+
+    @Test func ndof_quaternion_startSequence() {
+        let s = MWSensorFusionQuaternion(mode: .ndof)
+        #expect(s.enableCommands == [
+            Data([0x03, 0x02, 0x01, 0x00]),
+            Data([0x13, 0x02, 0x01, 0x00]),
+            Data([0x15, 0x02, 0x01, 0x00]),
+        ])
+        #expect(s.startCommands == [
+            Data([0x03, 0x01, 0x01]),
+            Data([0x13, 0x01, 0x01]),
+            Data([0x15, 0x01, 0x01]),
+            Data([0x19, 0x03, 0x08, 0x00]),  // QUATERNION = bit 3
+            Data([0x19, 0x01, 0x01]),
+        ])
+    }
+
+    @Test func ndof_quaternion_stopSequence() {
+        let s = MWSensorFusionQuaternion(mode: .ndof)
+        #expect(s.stopCommands == [
+            Data([0x19, 0x01, 0x00]),
+            Data([0x19, 0x03, 0x00, 0x7F]),
+            Data([0x03, 0x01, 0x00]),
+            Data([0x13, 0x01, 0x00]),
+            Data([0x15, 0x01, 0x00]),
+        ])
+        #expect(s.disableCommands == [
+            Data([0x03, 0x02, 0x00, 0x01]),
+            Data([0x13, 0x02, 0x00, 0x01]),
+            Data([0x15, 0x02, 0x00, 0x01]),
+        ])
+    }
+
+    /// Verifies that each of the 7 signals plugs the correct bit into the
+    /// OUTPUT_ENABLE byte at index 6 of the Python expected sequence.
+    @Test func ndof_outputEnableMask_perSignal() {
+        // (signal builder, expected mask bit)
+        let cases: [(any MWStreamable, UInt8)] = [
+            (MWSensorFusionCorrectedAcc(mode:  .ndof), 0x01),    // bit 0
+            (MWSensorFusionCorrectedGyro(mode: .ndof), 0x02),    // bit 1
+            (MWSensorFusionCorrectedMag(mode:  .ndof), 0x04),    // bit 2
+            (MWSensorFusionQuaternion(mode:    .ndof), 0x08),    // bit 3
+            (MWSensorFusionEuler(mode:         .ndof), 0x10),    // bit 4
+            (MWSensorFusionGravity(mode:       .ndof), 0x20),    // bit 5
+            (MWSensorFusionLinearAcceleration(mode: .ndof), 0x40), // bit 6
+        ]
+        for (signal, expectedBit) in cases {
+            // Index 3 of the 5-element startCommands: [acc, gyro, mag, enable_mask, fusion_start]
+            let cmd = signal.startCommands[3]
+            #expect(cmd == Data([0x19, 0x03, expectedBit, 0x00]),
+                    "OUTPUT_ENABLE mask wrong for signal with bit \(String(expectedBit, radix: 16))")
+        }
+    }
+
+    // MARK: IMU_PLUS — acc + gyro (no mag)
+
+    @Test func imuPlus_quaternion_startSequence() {
+        let s = MWSensorFusionQuaternion(mode: .imuPlus)
+        #expect(s.enableCommands == [
+            Data([0x03, 0x02, 0x01, 0x00]),
+            Data([0x13, 0x02, 0x01, 0x00]),
+        ])
+        #expect(s.startCommands == [
+            Data([0x03, 0x01, 0x01]),
+            Data([0x13, 0x01, 0x01]),
+            Data([0x19, 0x03, 0x08, 0x00]),
+            Data([0x19, 0x01, 0x01]),
+        ])
+    }
+
+    @Test func imuPlus_quaternion_stopSequence() {
+        let s = MWSensorFusionQuaternion(mode: .imuPlus)
+        #expect(s.stopCommands == [
+            Data([0x19, 0x01, 0x00]),
+            Data([0x19, 0x03, 0x00, 0x7F]),
+            Data([0x03, 0x01, 0x00]),
+            Data([0x13, 0x01, 0x00]),
+        ])
+        #expect(s.disableCommands == [
+            Data([0x03, 0x02, 0x00, 0x01]),
+            Data([0x13, 0x02, 0x00, 0x01]),
+        ])
+    }
+
+    // MARK: COMPASS — acc + mag (no gyro)
+
+    @Test func compass_quaternion_startSequence() {
+        let s = MWSensorFusionQuaternion(mode: .compass)
+        #expect(s.enableCommands == [
+            Data([0x03, 0x02, 0x01, 0x00]),
+            Data([0x15, 0x02, 0x01, 0x00]),
+        ])
+        #expect(s.startCommands == [
+            Data([0x03, 0x01, 0x01]),
+            Data([0x15, 0x01, 0x01]),
+            Data([0x19, 0x03, 0x08, 0x00]),
+            Data([0x19, 0x01, 0x01]),
+        ])
+    }
+
+    @Test func compass_quaternion_stopSequence() {
+        let s = MWSensorFusionQuaternion(mode: .compass)
+        #expect(s.stopCommands == [
+            Data([0x19, 0x01, 0x00]),
+            Data([0x19, 0x03, 0x00, 0x7F]),
+            Data([0x03, 0x01, 0x00]),
+            Data([0x15, 0x01, 0x00]),
+        ])
+        #expect(s.disableCommands == [
+            Data([0x03, 0x02, 0x00, 0x01]),
+            Data([0x15, 0x02, 0x00, 0x01]),
+        ])
+    }
+
+    // MARK: M4G — acc + mag (no gyro)
+
+    @Test func m4g_quaternion_startSequence() {
+        let s = MWSensorFusionQuaternion(mode: .m4g)
+        #expect(s.enableCommands == [
+            Data([0x03, 0x02, 0x01, 0x00]),
+            Data([0x15, 0x02, 0x01, 0x00]),
+        ])
+        #expect(s.startCommands == [
+            Data([0x03, 0x01, 0x01]),
+            Data([0x15, 0x01, 0x01]),
+            Data([0x19, 0x03, 0x08, 0x00]),
+            Data([0x19, 0x01, 0x01]),
+        ])
+    }
+
+    @Test func m4g_quaternion_stopSequence() {
+        let s = MWSensorFusionQuaternion(mode: .m4g)
+        #expect(s.stopCommands == [
+            Data([0x19, 0x01, 0x00]),
+            Data([0x19, 0x03, 0x00, 0x7F]),
+            Data([0x03, 0x01, 0x00]),
+            Data([0x15, 0x01, 0x00]),
+        ])
+        #expect(s.disableCommands == [
+            Data([0x03, 0x02, 0x00, 0x01]),
+            Data([0x15, 0x02, 0x00, 0x01]),
+        ])
+    }
+
+    // MARK: Single-Data forms preserve fusion-only meaning (regression check)
+
+    @Test func singleDataForms_areFusionOnly() {
+        // The single Data forms keep their fusion-only meaning so existing unit
+        // tests in `SensorFusionCommandTests` continue to pass.
+        let s = MWSensorFusionQuaternion(mode: .ndof)
+        #expect(s.enableCommand  == Data([0x19, 0x03, 0x08, 0x00]))
+        #expect(s.startCommand   == Data([0x19, 0x01, 0x01]))
+        #expect(s.stopCommand    == Data([0x19, 0x01, 0x00]))
+        #expect(s.disableCommand == Data([0x19, 0x03, 0x00, 0x08]))
+    }
+}
+
+// MARK: - Sensor fusion configure (full BLE write sequence)
+//
+// Reference: MetaWear-SDK-Cpp/test/test_sensor_fusion_config.py::test_configure_*.
+// `mbl_mw_sensor_fusion_write_config` issues fusion-config + underlying configs
+// per (mode, chip). Our SDK exposes this via `configureCommands`, which the
+// device flushes before `enableCommands`/`startCommands`.
+
+@Suite("Sensor Fusion Configure (BMI160)")
+struct SensorFusionConfigureBMI160Tests {
+
+    // MARK: NDOF — fusion + acc(100Hz) + gyro(100Hz) + mag
+
+    @Test func ndof_2g_2000dps_configure() {
+        // From test_configure_ndof — gr=0, ar=0:
+        //   fusion config_byte = 0x10, acc range_byte = 0x03, gyro range_byte = 0x00
+        let s = MWSensorFusionQuaternion(mode: .ndof,
+                                         accRange:  .g2,
+                                         gyroRange: .dps2000,
+                                         chip: .bmi160)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x01, 0x10]),     // fusion: NDOF, gr=0, ar=0
+            Data([0x03, 0x03, 0x28, 0x03]),     // acc:  100Hz, ±2g
+            Data([0x13, 0x03, 0x28, 0x00]),     // gyro: 100Hz, 2000dps
+            Data([0x15, 0x04, 0x04, 0x0E]),     // mag:  xy_reps=9, z_reps=15
+            Data([0x15, 0x03, 0x06]),           // mag:  ODR=25Hz
+        ])
+    }
+
+    @Test func ndof_16g_250dps_configure() {
+        // gr=3, ar=3 → fusion config_byte = (3+1)<<4 | 3 = 0x43,
+        //              acc range_byte = 0x0C, gyro range_byte = 0x03
+        let s = MWSensorFusionEuler(mode: .ndof,
+                                    accRange:  .g16,
+                                    gyroRange: .dps250,
+                                    chip: .bmi160)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x01, 0x43]),
+            Data([0x03, 0x03, 0x28, 0x0C]),
+            Data([0x13, 0x03, 0x28, 0x03]),
+            Data([0x15, 0x04, 0x04, 0x0E]),
+            Data([0x15, 0x03, 0x06]),
+        ])
+    }
+
+    @Test func ndof_configMatrix_exhaustive_matchesPython() {
+        // Mirrors test_configure_ndof's full 4×4 matrix.
+        let accCases:  [(MWSensorFusionAccRange, UInt8)] = [
+            (.g2,  0x03), (.g4,  0x05), (.g8,  0x08), (.g16, 0x0C),
+        ]
+        let gyroCases: [(MWSensorFusionGyroRange, UInt8)] = [
+            (.dps2000, 0x00), (.dps1000, 0x01), (.dps500, 0x02), (.dps250, 0x03),
+        ]
+        let configMasks: [[UInt8]] = [
+            [0x10, 0x11, 0x12, 0x13],
+            [0x20, 0x21, 0x22, 0x23],
+            [0x30, 0x31, 0x32, 0x33],
+            [0x40, 0x41, 0x42, 0x43],
+        ]
+        for (gi, (gr, gByte)) in gyroCases.enumerated() {
+            for (ai, (ar, aByte)) in accCases.enumerated() {
+                let s = MWSensorFusionQuaternion(mode: .ndof,
+                                                 accRange: ar,
+                                                 gyroRange: gr,
+                                                 chip: .bmi160)
+                #expect(s.configureCommands == [
+                    Data([0x19, 0x02, 0x01, configMasks[gi][ai]]),
+                    Data([0x03, 0x03, 0x28, aByte]),
+                    Data([0x13, 0x03, 0x28, gByte]),
+                    Data([0x15, 0x04, 0x04, 0x0E]),
+                    Data([0x15, 0x03, 0x06]),
+                ], "matrix mismatch at gyro=\(gr), acc=\(ar)")
+            }
+        }
+    }
+
+    // MARK: IMU_PLUS — fusion + acc(100Hz) + gyro(100Hz) — no mag
+
+    @Test func imuPlus_2g_2000dps_configure() {
+        let s = MWSensorFusionQuaternion(mode: .imuPlus,
+                                         accRange:  .g2,
+                                         gyroRange: .dps2000,
+                                         chip: .bmi160)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x02, 0x10]),     // fusion: IMU_PLUS
+            Data([0x03, 0x03, 0x28, 0x03]),     // acc:  100Hz, ±2g
+            Data([0x13, 0x03, 0x28, 0x00]),     // gyro: 100Hz, 2000dps
+        ])
+    }
+
+    // MARK: COMPASS — fusion + acc(25Hz) + mag — no gyro
+
+    @Test func compass_2g_configure() {
+        let s = MWSensorFusionQuaternion(mode: .compass,
+                                         accRange:  .g2,
+                                         gyroRange: .dps2000,
+                                         chip: .bmi160)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x03, 0x10]),     // fusion: COMPASS
+            Data([0x03, 0x03, 0x26, 0x03]),     // acc: 25Hz, ±2g  (confByte = 0x26)
+            Data([0x15, 0x04, 0x04, 0x0E]),
+            Data([0x15, 0x03, 0x06]),
+        ])
+    }
+
+    // MARK: M4G — fusion + acc(50Hz) + mag — no gyro
+
+    @Test func m4g_2g_configure() {
+        let s = MWSensorFusionQuaternion(mode: .m4g,
+                                         accRange:  .g2,
+                                         gyroRange: .dps2000,
+                                         chip: .bmi160)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x04, 0x10]),     // fusion: M4G
+            Data([0x03, 0x03, 0x27, 0x03]),     // acc: 50Hz, ±2g  (confByte = 0x27)
+            Data([0x15, 0x04, 0x04, 0x0E]),
+            Data([0x15, 0x03, 0x06]),
+        ])
+    }
+
+    // MARK: SLEEP — fusion config only (parity with C++ — no underlying writes)
+
+    @Test func sleep_writesOnlyFusionConfig() {
+        let s = MWSensorFusionQuaternion(mode: .sleep,
+                                         accRange:  .g2,
+                                         gyroRange: .dps2000,
+                                         chip: .bmi160)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x00, 0x10]),
+        ])
+    }
+}
+
+// MARK: - Sensor fusion configure (BMI270)
+//
+// On BMI270 boards the gyro module reports `implementation = 1`, the acc reports
+// `implementation = 4`. Our SDK takes a `chip` parameter on each fusion struct.
+// The acc config byte differs from BMI160: bit[7]=filter_perf=1 for ODR>=12.5 Hz
+// (so acc_conf becomes 0xA8 / 0xA6 / 0xA7), and the range byte is 0-based
+// (0/1/2/3 instead of 0x03/0x05/0x08/0x0C). Gyro and mag bytes are unchanged.
+
+@Suite("Sensor Fusion Configure (BMI270)")
+struct SensorFusionConfigureBMI270Tests {
+
+    @Test func ndof_2g_2000dps_configure_bmi270() {
+        let s = MWSensorFusionQuaternion(mode: .ndof,
+                                         accRange:  .g2,
+                                         gyroRange: .dps2000,
+                                         chip: .bmi270)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x01, 0x10]),     // fusion: NDOF (unchanged)
+            Data([0x03, 0x03, 0xA8, 0x00]),     // acc: 100Hz, ±2g (BMI270: confByte=0xA8, range=0)
+            Data([0x13, 0x03, 0x28, 0x00]),     // gyro: 100Hz, 2000dps (unchanged)
+            Data([0x15, 0x04, 0x04, 0x0E]),
+            Data([0x15, 0x03, 0x06]),
+        ])
+    }
+
+    @Test func ndof_16g_250dps_configure_bmi270() {
+        let s = MWSensorFusionEuler(mode: .ndof,
+                                    accRange:  .g16,
+                                    gyroRange: .dps250,
+                                    chip: .bmi270)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x01, 0x43]),
+            Data([0x03, 0x03, 0xA8, 0x03]),     // BMI270: range 16g = 0x03
+            Data([0x13, 0x03, 0x28, 0x03]),
+            Data([0x15, 0x04, 0x04, 0x0E]),
+            Data([0x15, 0x03, 0x06]),
+        ])
+    }
+
+    @Test func compass_2g_configure_bmi270() {
+        let s = MWSensorFusionQuaternion(mode: .compass,
+                                         accRange:  .g2,
+                                         gyroRange: .dps2000,
+                                         chip: .bmi270)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x03, 0x10]),
+            Data([0x03, 0x03, 0xA6, 0x00]),     // BMI270 25Hz confByte = 0xA6
+            Data([0x15, 0x04, 0x04, 0x0E]),
+            Data([0x15, 0x03, 0x06]),
+        ])
+    }
+
+    @Test func m4g_2g_configure_bmi270() {
+        let s = MWSensorFusionQuaternion(mode: .m4g,
+                                         accRange:  .g2,
+                                         gyroRange: .dps2000,
+                                         chip: .bmi270)
+        #expect(s.configureCommands == [
+            Data([0x19, 0x02, 0x04, 0x10]),
+            Data([0x03, 0x03, 0xA7, 0x00]),     // BMI270 50Hz confByte = 0xA7
+            Data([0x15, 0x04, 0x04, 0x0E]),
+            Data([0x15, 0x03, 0x06]),
+        ])
+    }
+}
+
+// MARK: - Chip-detection helpers
+
+@Suite("Sensor Fusion Chip Detection")
+struct SensorFusionChipTests {
+
+    @Test func chip_fromGyroImpl_matchesCpp() {
+        #expect(MWSensorFusionChip(gyroImpl: 0) == .bmi160)
+        #expect(MWSensorFusionChip(gyroImpl: 1) == .bmi270)
+        #expect(MWSensorFusionChip(gyroImpl: 7) == nil)
+    }
+
+    @Test func chip_fromAccImpl_matchesCpp() {
+        #expect(MWSensorFusionChip(accImpl: 1) == .bmi160)
+        #expect(MWSensorFusionChip(accImpl: 4) == .bmi270)
+        #expect(MWSensorFusionChip(accImpl: 0) == nil)
+    }
+}
+
 // MARK: - Barometer commands
 //
 // Reference vectors from MetaWear-SDK-Cpp/test/test_barometer_bmp280.py and
@@ -1549,11 +1985,30 @@ struct MWAccelerometerGenericAPITests {
 @Suite("Accelerometer Bosch — Orientation Detection")
 struct AccBoschOrientationTests {
 
-    @Test func enableCommand() {
-        #expect(MWAccelerometerBosch.EnableOrientation().commandData == Data([0x03, 0x0f, 0x01, 0x00]))
+    @Test func enableCommand_bmi160() throws {
+        // Happy path: orientation detection is BMI160-only.
+        let cmd = try MWAccelerometerBosch.EnableOrientation(chip: .bmi160)
+        #expect(cmd.commandData == Data([0x03, 0x0f, 0x01, 0x00]))
+    }
+
+    @Test func enableCommand_throwsOnBMI270() {
+        // Chip guard: constructing on BMI270 must throw with the legacy
+        // verbatim error string — `Tests/MetaWearHardwareTests/StreamTests.swift`
+        // pins the same diagnostic against a real BMI270 board.
+        do {
+            _ = try MWAccelerometerBosch.EnableOrientation(chip: .bmi270)
+            Issue.record("EnableOrientation(chip: .bmi270) should throw")
+        } catch let error as MWError {
+            #expect(error.localizedDescription ==
+                    "Operation failed: Orientation requires a BMI160 module, which this device lacks.")
+        } catch {
+            Issue.record("Expected MWError, got \(type(of: error)): \(error)")
+        }
     }
 
     @Test func disableCommand() {
+        // Disable is unguarded — writing zero bits to a register the BMI270
+        // doesn't react to is harmless.
         #expect(MWAccelerometerBosch.DisableOrientation().commandData == Data([0x03, 0x0f, 0x00, 0x01]))
     }
 

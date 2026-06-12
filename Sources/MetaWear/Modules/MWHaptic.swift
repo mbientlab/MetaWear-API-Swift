@@ -35,6 +35,9 @@ public enum MWHaptic {
 
     // MARK: - Pulse command
 
+    /// One-shot pulse command for the haptic motor or buzzer. Prefer the
+    /// `MWHaptic.motor(...)` / `MWHaptic.buzzer(...)` factories over building
+    /// this directly.
     public struct Pulse: MWCommand, Sendable {
         public let mode: Mode
         /// Strength of the pulse (0–100 %).

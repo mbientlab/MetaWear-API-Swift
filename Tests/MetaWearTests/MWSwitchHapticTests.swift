@@ -9,21 +9,27 @@ struct SwitchCommandTests {
 
     let sensor = MWSwitch()
 
-    @Test func enableCommand() {
-        #expect(sensor.enableCommand == Data([0x01, 0x01, 0x01]))
+    // The switch's "subscribe = enable" is the same wire write
+    // (`[0x01, 0x01, 0x01]`). The actor's generic `startStream` already
+    // emits that packet as the data-signal subscribe, so all four
+    // module-level hooks below must stay no-ops to avoid sending the
+    // identical write twice. The wire-level integration test
+    // `switchStream_sendsSubscribeAndUnsubscribe` (further down) is what
+    // pins the actual `[0x01, 0x01, 0x01]` / `[0x01, 0x01, 0x00]` bytes
+    // on the BLE side.
+    @Test func enableCommand_isEmpty() {
+        #expect(sensor.enableCommand.isEmpty)
     }
 
-    @Test func disableCommand() {
-        #expect(sensor.disableCommand == Data([0x01, 0x01, 0x00]))
+    @Test func disableCommand_isEmpty() {
+        #expect(sensor.disableCommand.isEmpty)
     }
 
     @Test func startCommand_isEmpty() {
-        // Switch uses a single subscribe command (enableCommand); startCommand is a no-op
         #expect(sensor.startCommand.isEmpty)
     }
 
     @Test func stopCommand_isEmpty() {
-        // Switch uses a single unsubscribe command (disableCommand); stopCommand is a no-op
         #expect(sensor.stopCommand.isEmpty)
     }
 
@@ -84,7 +90,7 @@ struct SwitchStreamingTests {
     @Test func switchStream_deliversPressedThenReleased() async throws {
         let (device, transport) = try await connectedSwitchDevice()
 
-        let stream = try await device.stream(MWSwitch(), usePacked: false)
+        let stream = try await device.startStream(MWSwitch(), usePacked: false)
 
         let received = SwitchAtomic<[Bool]>([])
         let consumer = Task {
@@ -107,9 +113,9 @@ struct SwitchStreamingTests {
     @Test func switchStream_sendsSubscribeAndUnsubscribe() async throws {
         let (device, transport) = try await connectedSwitchDevice()
 
-        // `stream()` issues the subscribe command; `stopStreaming()` issues the unsubscribe.
+        // `startStream()` issues the subscribe command; `stopStreaming()` issues the unsubscribe.
         let sensor = MWSwitch()
-        let stream = try await device.stream(sensor, usePacked: false)
+        let stream = try await device.startStream(sensor, usePacked: false)
         let consumer = Task {
             for try await _ in stream { }
         }

@@ -13,6 +13,14 @@ actor MWCentralManager: NSObject {
     private var knownPeripherals: [UUID: CBPeripheral] = [:]
     /// Transports that are actively connecting or connected, keyed by peripheral UUID.
     private var transports: [UUID: CoreBluetoothPeripheralTransport] = [:]
+    /// Cancels that arrived before `requestConnect` registered the peripheral.
+    /// Applied immediately on the next `requestConnect` for the same identifier
+    /// so iOS fires `didFailToConnect` (or `didDisconnectPeripheral`) and the
+    /// transport's pending `disconnectContinuation` is properly resumed.
+    /// Without this, a `disconnect()` raced ahead of `connect()` becomes a
+    /// silent no-op and `disconnect()` hangs forever — see
+    /// `connect_thenImmediateDisconnect_endsAtDisconnected`.
+    private var pendingCancels: Set<UUID> = []
 
     // MARK: - Scan
 
@@ -31,15 +39,14 @@ actor MWCentralManager: NSObject {
     /// Start scanning and yield results until the caller cancels the stream.
     func scan(for services: [CBUUID]?) -> AsyncStream<ScanResult> {
         let serviceStrings = services?.map { $0.uuidString }
-        return AsyncStream { [weak self] continuation in
-            guard let self else { return }
-            Task {
-                await self.beginScan(serviceStrings: serviceStrings, continuation: continuation)
-            }
-            continuation.onTermination = { [weak self] _ in
-                Task { await self?.endScan() }
-            }
+        let (stream, continuation) = AsyncStream<ScanResult>.makeStream()
+        Task {
+            await self.beginScan(serviceStrings: serviceStrings, continuation: continuation)
         }
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.endScan() }
+        }
+        return stream
     }
 
     // MARK: - API used by CoreBluetoothPeripheralTransport
@@ -53,18 +60,37 @@ actor MWCentralManager: NSObject {
         guard let peripheral = knownPeripherals[identifier]
                 ?? central.retrievePeripherals(withIdentifiers: [identifier]).first else {
             mwLog("[BLE] requestConnect: peripheral \(identifier) not found")
+            // No peripheral to ever connect to — drop any racing cancel request.
+            pendingCancels.remove(identifier)
             throw MWError.operationFailed("Peripheral \(identifier) not found")
         }
         mwLog("[BLE] requestConnect: \(identifier)")
         knownPeripherals[peripheral.identifier] = peripheral
         transports[peripheral.identifier] = transport
         central.connect(peripheral, options: nil)
+
+        // If a `disconnect()` raced ahead and queued a cancel before we
+        // registered the peripheral, honour it now. iOS will fire
+        // `didFailToConnect` (peripheral was .connecting), which resolves both
+        // continuations through `handleFailedToConnect`.
+        if pendingCancels.remove(identifier) != nil {
+            mwLog("[BLE] requestConnect: applying queued cancel for \(identifier)")
+            central.cancelPeripheralConnection(peripheral)
+        }
     }
 
     /// Ask CoreBluetooth to disconnect by identifier.
     func requestDisconnect(identifier: UUID) {
         mwLog("[BLE] requestDisconnect: \(identifier)")
-        guard let peripheral = knownPeripherals[identifier] else { return }
+        guard let peripheral = knownPeripherals[identifier] else {
+            // Peripheral not yet registered. This happens when `disconnect()`
+            // races ahead of `connect()` — the disconnect Task scheduled
+            // before the connect Task. Queue the cancel so `requestConnect`
+            // applies it as soon as it registers the peripheral.
+            mwLog("[BLE] requestDisconnect: peripheral not registered yet, queueing cancel")
+            pendingCancels.insert(identifier)
+            return
+        }
         central.cancelPeripheralConnection(peripheral)
     }
 
@@ -107,8 +133,14 @@ extension MWCentralManager: CBCentralManagerDelegate {
     ) {
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name
         let serviceUUIDs = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?.map { $0.uuidString }.joined(separator: ",") ?? "none"
-        mwLog("[BLE] didDiscover: \(peripheral.identifier) name=\(name ?? "nil") rssi=\(RSSI) services=[\(serviceUUIDs)]")
-        let result = ScanResult(identifier: peripheral.identifier, name: name, rssi: RSSI.intValue)
+        let mfgData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
+        mwLog("[BLE] didDiscover: \(peripheral.identifier) name=\(name ?? "nil") rssi=\(RSSI) services=[\(serviceUUIDs)] mfg=\(mfgData?.count ?? 0)B")
+        let result = ScanResult(
+            identifier: peripheral.identifier,
+            name: name,
+            rssi: RSSI.intValue,
+            manufacturerData: mfgData
+        )
         Task {
             await self.cachePeripheral(peripheral)
             await self.scanContinuation?.yield(result)

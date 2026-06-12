@@ -2,15 +2,29 @@ import Foundation
 
 // MARK: - Magnetometer (BMM150)
 
+/// Streams magnetic field (µT) from the BMM150 magnetometer (module 0x15).
+///
+/// Construct from a Bosch-recommended `Preset` for typical use, or supply
+/// manual `xyReps` / `zReps` / `odr` values for fine control.
+///
+/// ```swift
+/// let stream = try await device.startStream(MWMagnetometer(preset: .lowPower))
+/// for try await sample in stream { print(sample.value) }
+/// ```
 public struct MWMagnetometer: MWLoggable {
     public typealias Sample = CartesianFloat
 
-    /// Preset power modes recommended by Bosch.
+    /// Preset power modes recommended by Bosch. Each preset balances current
+    /// draw and noise floor at a fixed ODR / repetition count.
     /// Mirrors C++ `MblMwMagBmm150Preset`.
     public enum Preset: Sendable, CaseIterable {
+        /// 10 Hz, 170 µA, ~1.0 µT noise — recommended for most use cases.
         case lowPower           // 10 Hz, 170 µA, ~1.0 µT noise (recommended for most use cases)
+        /// 10 Hz, 0.5 mA, 0.6 µT noise.
         case regular            // 10 Hz, 0.5 mA, 0.6 µT
+        /// 10 Hz, 0.8 mA, 0.5 µT noise.
         case enhancedRegular    // 10 Hz, 0.8 mA, 0.5 µT
+        /// 20 Hz, 4.9 mA, 0.3 µT noise.
         case highAccuracy       // 20 Hz, 4.9 mA, 0.3 µT
 
         var xyReps: UInt8 { [3, 9, 15, 47][index] }
@@ -78,6 +92,15 @@ public struct MWMagnetometer: MWLoggable {
 
     // MARK: MWStreamable
 
+    // BMM150 cold-boot workaround — matches MetaWear-Swift-Combine-SDK's
+    // `streamSignal`: drop POWER_MODE to SLEEP and let the chip settle before
+    // writing the REPETITIONS / DATA_RATE / DATA_INTERRUPT / POWER_MODE bytes.
+    // Without this, a freshly-powered MetaMotion silently produces zero samples.
+    public var warmupCommands: [Data] {
+        [MWPacket.command(.magnetometer, 0x01, [0x00])]  // POWER_MODE = SLEEP
+    }
+    public var warmupDelayNanos: UInt64 { 200_000_000 }  // 200 ms
+
     public var configureCommands: [Data] {
         // XY reps byte = (xy_reps - 1) / 2, Z reps byte = z_reps - 1
         let xyByte = (xyReps - 1) / 2
@@ -110,6 +133,9 @@ public struct MWMagnetometer: MWLoggable {
     // (SUSPEND_REVISION); when the revision is lower, the command is silently
     // dropped. Callers are expected to check `moduleInfo(for:.magnetometer)?.revision`
     // before sending this command.
+
+    /// Suspend the magnetometer (POWER_MODE = 2). Requires module revision >= 2;
+    /// older firmware silently drops the command.
     public struct Suspend: MWCommand {
         public init() {}
         public var commandData: Data {
@@ -121,6 +147,10 @@ public struct MWMagnetometer: MWLoggable {
     //
     // Mirrors C++ `mbl_mw_mag_bmm150_configure`. Allows fully manual control
     // of xy/z repetitions and ODR, bypassing the preset helper.
+
+    /// One-shot configure command for the BMM150. Writes both REPETITIONS
+    /// (register 0x04) and DATA_RATE (register 0x03) without starting / stopping
+    /// the sensor, bypassing the `Preset` helper.
     public struct Configure: MWCommand {
         public let xyReps: UInt8
         public let zReps: UInt8

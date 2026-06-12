@@ -19,6 +19,17 @@ import Foundation
 // Gain encoding has a two-slot gap per the LTR329 datasheet: enum values 0-3
 // map directly, but 48X / 96X map to 6 / 7 respectively (C++ adds +2).
 
+/// Streams illuminance from the LTR329 ambient-light sensor (module 0x14).
+///
+/// Present on MetaWear RPro / MotionR boards. Samples are raw illuminance values
+/// (milli-lux); use `MWAmbientLight.lux(from:)` to convert to lux.
+///
+/// ```swift
+/// let stream = try await device.startStream(MWAmbientLight(gain: .x1))
+/// for try await raw in stream {
+///     let lux = MWAmbientLight.lux(from: raw.value)
+/// }
+/// ```
 public struct MWAmbientLight: MWStreamable {
     public typealias Sample = UInt32   // raw illuminance (milli-lux). Divide by 1000 for lux.
 
@@ -142,11 +153,25 @@ public extension MWAmbientLight {
     }
 }
 
+// MARK: - MWLoggable
+//
+// LTR329 illuminance streams a single 4-byte UInt32 sample (raw milli-lux).
+// One 4-byte log chunk instead of the IMU default of (4, 2).
+extension MWAmbientLight: MWLoggable {
+    public var loggerKey: String { "illuminance" }
+    public var logDataChunks: [(offset: UInt8, length: UInt8)] {
+        [(offset: 0, length: 4)]
+    }
+}
+
 // MARK: - One-shot configure command
 //
 // Mirrors C++ `mbl_mw_als_ltr329_write_config`. Useful when the caller owns an
 // `MWAmbientLight` value and wants to emit just the CONFIG write (without the
 // start/stop lifecycle).
+
+/// One-shot command that writes an `MWAmbientLight` configuration (gain,
+/// integration time, measurement rate) without starting / stopping the sensor.
 public struct MWAmbientLightWriteConfig: MWCommand, Sendable {
     public let config: MWAmbientLight
     public init(_ config: MWAmbientLight) { self.config = config }

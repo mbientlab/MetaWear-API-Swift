@@ -67,6 +67,17 @@ public struct MWHumidity: MWReadable {
     }
 }
 
+// MARK: - MWPolledLoggable
+//
+// BME280 humidity read response is `[module=0x16, register=0x81, b0,b1,b2,b3]`
+// — four bytes of payload after the BLE header (UInt32 LE raw / 1024). One
+// 4-byte log chunk fills exactly one flash entry.
+extension MWHumidity: MWPolledLoggable {
+    public var logDataChunks: [(offset: UInt8, length: UInt8)] {
+        [(offset: 0, length: 4)]
+    }
+}
+
 // MARK: - Set oversampling command
 //
 // Mirrors C++ `mbl_mw_humidity_bme280_set_oversampling`.

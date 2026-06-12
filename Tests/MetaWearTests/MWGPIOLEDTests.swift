@@ -321,7 +321,7 @@ struct GPIOPinChangeStreamTests {
         let (device, transport) = try await connectedDevice()
         let sensor = MWGPIOPinChange(pin: 0, type: .any)
 
-        let stream = try await device.stream(sensor, usePacked: false)
+        let stream = try await device.startStream(sensor, usePacked: false)
 
         let received = MWAtomic<[MWGPIOSample]>([])
         let consumer = Task {

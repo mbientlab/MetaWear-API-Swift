@@ -23,6 +23,12 @@ public final class MWSessionRecord {
     public var deviceSerial: String
     public var deviceModel: String
     public var deviceFirmware: String
+    /// User-facing description of the sensor + settings the session
+    /// captured (e.g. "Gyroscope · ±2000 dps · 25 Hz"). Optional because
+    /// `sensorKind` alone is enough to load the samples; this is a display
+    /// hint for the history list. Nil on records written before this
+    /// field was added.
+    public var label: String?
 
     @Relationship(deleteRule: .cascade, inverse: \MWSampleRecord.session)
     public var samples: [MWSampleRecord]
@@ -35,7 +41,8 @@ public final class MWSessionRecord {
         endDate: Date,
         deviceSerial: String,
         deviceModel: String,
-        deviceFirmware: String
+        deviceFirmware: String,
+        label: String? = nil
     ) {
         self.id             = id
         self.deviceID       = deviceID
@@ -45,6 +52,7 @@ public final class MWSessionRecord {
         self.deviceSerial   = deviceSerial
         self.deviceModel    = deviceModel
         self.deviceFirmware = deviceFirmware
+        self.label          = label
         self.samples        = []
     }
 }

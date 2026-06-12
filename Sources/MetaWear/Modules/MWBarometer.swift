@@ -17,6 +17,17 @@ import Foundation
 // except when pressure oversampling is `ULTRA_HIGH`, in which case it is set
 // to `LOW_POWER` (2).
 
+/// Streams atmospheric pressure (Pascals) from the BMP280 or BME280 barometer
+/// (module 0x12).
+///
+/// Both chips share an identical register map; they differ only in the
+/// interpretation of standby indices 6 and 7. Use the BMP280 initializer for
+/// motion boards and the BME280 initializer for environmental boards.
+///
+/// ```swift
+/// let stream = try await device.startStream(MWBarometer(oversampling: .standard))
+/// for try await sample in stream { print(sample.value, "Pa") }
+/// ```
 public struct MWBarometer: MWStreamable {
     public typealias Sample = Float   // Pascals
 
@@ -33,6 +44,8 @@ public struct MWBarometer: MWStreamable {
         case skip = 0, ultraLowPower, lowPower, standard, high, ultraHigh
     }
 
+    /// Built-in IIR low-pass filter coefficient. Higher averaging values reduce
+    /// noise at the cost of step response.
     public enum IIRFilter: UInt8, Sendable, CaseIterable {
         case off = 0, avg2, avg4, avg8, avg16
     }
@@ -112,8 +125,24 @@ public struct MWBarometer: MWStreamable {
     }
 }
 
+// MARK: - MWLoggable
+//
+// The barometer streams a single 4-byte UInt32 pressure sample. On-board
+// logging uses one 4-byte chunk rather than the IMU default of (4, 2).
+extension MWBarometer: MWLoggable {
+    public var loggerKey: String { "pressure" }
+    public var logDataChunks: [(offset: UInt8, length: UInt8)] {
+        [(offset: 0, length: 4)]
+    }
+}
+
 // MARK: - Altitude signal (same hardware, different register)
 
+/// Streams altitude (meters) from the BMP280 / BME280 barometer.
+///
+/// Backed by the same hardware as `MWBarometer` — the firmware computes
+/// altitude from pressure and exposes it on register 0x02. Configuration is
+/// supplied via an `MWBarometer` value.
 public struct MWAltimeter: MWStreamable {
     public typealias Sample = Float   // Meters
 
@@ -144,6 +173,11 @@ public struct MWAltimeter: MWStreamable {
 // as streaming pressure (0x01), but with the READ bit set — the firmware
 // returns a single sample rather than enabling cyclic notifications.
 
+/// One-shot pressure read from the BMP280 / BME280 barometer.
+///
+/// Same register as the streaming pressure signal (0x01), but with the read
+/// bit set — the firmware returns a single sample rather than enabling cyclic
+/// notifications.
 public struct MWBarometerPressureRead: MWReadable {
     public typealias Sample = Float   // Pascals
 

@@ -57,7 +57,8 @@ public actor MWPersistenceStore {
         deviceID: UUID,
         deviceInfo: MWDeviceInformation,
         sensorKind: String,
-        samples: [MWLoggedSample<S>]
+        samples: [MWLoggedSample<S>],
+        label: String? = nil
     ) throws -> MWSessionSnapshot {
         guard !samples.isEmpty else { throw MWPersistenceError.emptySampleSet }
 
@@ -68,7 +69,8 @@ public actor MWPersistenceStore {
             endDate:        samples.last!.date,
             deviceSerial:   deviceInfo.serialNumber,
             deviceModel:    deviceInfo.modelNumber,
-            deviceFirmware: deviceInfo.firmwareRevision
+            deviceFirmware: deviceInfo.firmwareRevision,
+            label:          label
         )
         modelContext.insert(session)
 

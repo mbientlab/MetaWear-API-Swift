@@ -24,6 +24,33 @@ public protocol MWStreamable: MWSensor {
     /// Disable the data interrupt / output.
     var disableCommand: Data { get }
 
+    /// Multi-command form of `enableCommand`. Override when a sensor needs to
+    /// issue more than one BLE write to enable its data path — e.g. sensor
+    /// fusion enables interrupts on the underlying acc/gyro/mag chips.
+    /// Default: `[enableCommand]` (empty Data filtered out).
+    var enableCommands: [Data] { get }
+
+    /// Multi-command form of `startCommand`. Override when a sensor needs
+    /// more than one BLE write to start its data path. Default: `[startCommand]`.
+    var startCommands: [Data] { get }
+
+    /// Multi-command form of `stopCommand`. Override when a sensor needs more
+    /// than one BLE write to stop. Default: `[stopCommand]`.
+    var stopCommands: [Data] { get }
+
+    /// Multi-command form of `disableCommand`. Override when a sensor needs
+    /// more than one BLE write to disable. Default: `[disableCommand]`.
+    var disableCommands: [Data] { get }
+
+    /// Optional commands issued *before* `configureCommands` to wake a
+    /// cold-booted sensor out of a suspend/off state. Default: empty.
+    var warmupCommands: [Data] { get }
+
+    /// Nanoseconds to sleep after `warmupCommands` and before `configureCommands`.
+    /// Default: 0. Override for sensors whose chip needs time to transition
+    /// (e.g. BMM150 SUSPEND → SLEEP).
+    var warmupDelayNanos: UInt64 { get }
+
     /// Parse a single XYZ / scalar notification packet into a typed sample.
     func parseSample(from packet: Data) throws -> Sample
 
@@ -34,6 +61,16 @@ public protocol MWStreamable: MWSensor {
 
 public extension MWStreamable {
     var packedDataRegister: UInt8? { nil }
+
+    var warmupCommands: [Data] { [] }
+    var warmupDelayNanos: UInt64 { 0 }
+
+    /// Default: wrap the single Data in an array, dropping empties so a sensor
+    /// that has no enable/disable command (e.g. switch) still reports `[]`.
+    var enableCommands:  [Data] { enableCommand.isEmpty  ? [] : [enableCommand]  }
+    var startCommands:   [Data] { startCommand.isEmpty   ? [] : [startCommand]   }
+    var stopCommands:    [Data] { stopCommand.isEmpty    ? [] : [stopCommand]    }
+    var disableCommands: [Data] { disableCommand.isEmpty ? [] : [disableCommand] }
 
     func parsePackedSamples(from packet: Data) throws -> [Sample] { [] }
 }

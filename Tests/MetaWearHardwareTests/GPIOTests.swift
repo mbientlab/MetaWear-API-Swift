@@ -2,8 +2,8 @@ import Testing
 import Foundation
 import MetaWear
 
-@Suite("Hardware — GPIO & Settings", .serialized)
-struct GPIOSettingsTests {
+@Suite("Hardware — GPIO", .serialized)
+struct GPIOTests {
 
     // MARK: - GPIO digital read
 
@@ -86,7 +86,7 @@ struct GPIOSettingsTests {
             }
 
             let signal = MWGPIOPinChange(pin: 0, type: .any)
-            let stream = try await device.stream(signal)
+            let stream = try await device.startStream(signal)
             let collector = Task {
                 for try await _ in stream { break }
             }
@@ -95,74 +95,6 @@ struct GPIOSettingsTests {
             collector.cancel()
             try await device.stopStreaming(signal)
             print("\n  ✓ GPIO pin-change stream started and stopped without error\n")
-        }
-    }
-
-    // MARK: - Settings
-
-    @Test @MainActor
-    func settings_setAndRestoreDeviceName() async throws {
-        try await withConnectedDevice { device in
-            let info = await device.deviceInfo
-            let originalName = info?.modelNumber ?? "MetaWear"
-
-            // Set a temporary name (max 8 UTF-8 bytes)
-            try await device.send(MWSettings.SetDeviceName("MWTest"))
-            // Restore the original name (truncated to 8 bytes)
-            let restoreName = String(originalName.prefix(8))
-            try await device.send(MWSettings.SetDeviceName(restoreName))
-            print("\n  ✓ Device name set and restored without error\n")
-        }
-    }
-
-    @Test @MainActor
-    func settings_setTXPower_doesNotThrow() async throws {
-        try await withConnectedDevice { device in
-            try await device.send(MWSettings.SetTXPower(.zero))
-            try await device.send(MWSettings.SetTXPower(.plus4))
-            print("\n  ✓ TX power set without error\n")
-        }
-    }
-
-    @Test @MainActor
-    func settings_setConnectionParameters_lowLatency() async throws {
-        try await withConnectedDevice { device in
-            try await device.send(MWSettings.SetConnectionParameters.lowLatency)
-            try await Task.sleep(for: .seconds(1))
-            // Restore balanced profile before disconnect
-            try await device.send(MWSettings.SetConnectionParameters.balanced)
-            print("\n  ✓ Connection parameters changed to low-latency and restored\n")
-        }
-    }
-
-    @Test @MainActor
-    func settings_startAdvertising_doesNotThrow() async throws {
-        try await withConnectedDevice { device in
-            try await device.send(MWSettings.StartAdvertising())
-            print("\n  ✓ StartAdvertising sent without error\n")
-        }
-    }
-
-    // MARK: - iBeacon
-
-    @Test @MainActor
-    func iBeacon_enableAndDisable_doesNotThrow() async throws {
-        try await withConnectedDevice { device in
-            guard await device.moduleInfo(for: .iBeacon)?.isPresent == true else {
-                print("\n  Skipping iBeacon — module not present\n")
-                return
-            }
-
-            try await device.send(MWiBeacon.SetUUID(uuid: UUID()))
-            try await device.send(MWiBeacon.SetMajor(1))
-            try await device.send(MWiBeacon.SetMinor(1))
-            try await device.send(MWiBeacon.SetRXPower(-55))
-            try await device.send(MWiBeacon.SetTXPower(-4))
-            try await device.send(MWiBeacon.SetPeriod(700))
-            try await device.send(MWiBeacon.Enable())
-            try await Task.sleep(for: .seconds(1))
-            try await device.send(MWiBeacon.Disable())
-            print("\n  ✓ iBeacon enabled and disabled without error\n")
         }
     }
 }

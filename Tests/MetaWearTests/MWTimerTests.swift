@@ -46,9 +46,10 @@ private func createTimer(
 ) async throws -> MWTimer {
     let injector = Task {
         try? await Task.sleep(nanoseconds: 5_000_000)
-        // Response: [0x0C, 0x82, timer_id]
+        // Response: [0x0C, 0x02, timer_id] — real firmware replies with a plain
+        // notification (high bit clear), NOT a read response. Mirror that here.
         await transport.inject(
-            notification: Data([0x0C, 0x82, boardAssignedID]),
+            notification: Data([0x0C, 0x02, boardAssignedID]),
             to: MWUUIDs.notify
         )
     }

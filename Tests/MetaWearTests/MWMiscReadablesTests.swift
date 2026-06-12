@@ -57,28 +57,39 @@ struct MWLastResetTimeTests {
         #expect(MWLastResetTime().readCommand == Data([0x0B, 0x84]))
     }
 
-    // tick=0 → reset time ≈ now
+    // tick=0, reset_uid=0 → reset time ≈ now
     @Test func parse_zeroTick_returnsNow() throws {
-        let packet = Data([0x0B, 0x84, 0x00, 0x00, 0x00, 0x00])
+        let packet = Data([0x0B, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00])
         let before = Date()
         let parsed = try MWLastResetTime().parseSample(from: packet)
         let after = Date()
-        #expect(parsed >= before.addingTimeInterval(-0.1))
-        #expect(parsed <= after.addingTimeInterval(0.1))
+        #expect(parsed.epoch >= before.addingTimeInterval(-0.1))
+        #expect(parsed.epoch <= after.addingTimeInterval(0.1))
+        #expect(parsed.resetUID == 0)
     }
 
     // tick=1000 → 1000 * 1.4648 ms ≈ 1.465 s in the past
     @Test func parse_1000tick_returnsPast() throws {
-        let packet = Data([0x0B, 0x84, 0xE8, 0x03, 0x00, 0x00])   // 1000 LE
+        let packet = Data([0x0B, 0x84, 0xE8, 0x03, 0x00, 0x00, 0x03])   // 1000 LE, reset_uid=3
         let now = Date()
         let parsed = try MWLastResetTime().parseSample(from: packet)
-        let elapsed = now.timeIntervalSince(parsed)
+        let elapsed = now.timeIntervalSince(parsed.epoch)
         let expected = 1000.0 * MWPacketParser.msPerTick / 1000.0   // ≈ 1.4648 s
         #expect(abs(elapsed - expected) < 0.1)
+        #expect(parsed.resetUID == 3)
+    }
+
+    // The trailing reset_uid byte is masked to 3 bits (`RESET_UID_MASK = 0x07`)
+    // — anything in the upper bits is firmware bookkeeping we ignore.
+    @Test func parse_resetUID_masksToLowThreeBits() throws {
+        let packet = Data([0x0B, 0x84, 0x00, 0x00, 0x00, 0x00, 0xFF])
+        let parsed = try MWLastResetTime().parseSample(from: packet)
+        #expect(parsed.resetUID == 0x07)
     }
 
     @Test func parse_shortPacket_throws() {
-        let packet = Data([0x0B, 0x84, 0x00])
+        // 6 bytes — missing the trailing reset_uid — is now considered short.
+        let packet = Data([0x0B, 0x84, 0x00, 0x00, 0x00, 0x00])
         #expect(throws: MWError.self) {
             _ = try MWLastResetTime().parseSample(from: packet)
         }

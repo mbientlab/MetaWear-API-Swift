@@ -9,7 +9,7 @@ This file captures all architecture decisions made so far.
 
 - Native iOS app + reusable Swift SDK
 - No dependency on MbientLab's existing SDKs
-- Protocol spec sourced from: `/Users/kasso/Documents/MetaWear-API/docs/protocol-reference.md`
+- Protocol spec sourced from: `/Users/kasso/Documents/MetaWear-API/docs/api-specification.md` (the former `protocol-reference.md` was merged into it 2026-06; its math-op table was wrong — firmware ops are Add=1…Subtract=9, Abs=10, Constant=11)
 
 ---
 
@@ -429,4 +429,4 @@ mbl_mw_some_async_function(board, bridgeRetained(obj: continuation)) { context, 
 
 ## Reference
 
-Full byte-level protocol: `/Users/kasso/Documents/MetaWear-API/docs/protocol-reference.md`
+Full byte-level protocol: `/Users/kasso/Documents/MetaWear-API/docs/api-specification.md`

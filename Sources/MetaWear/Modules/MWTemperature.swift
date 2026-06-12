@@ -15,11 +15,21 @@ import Foundation
 
 // MARK: - Temperature source enum (matches C++ `MblMwTemperatureSource`)
 
+/// Physical source backing one channel of the multi-channel temperature module.
+///
+/// Each MetaWear board exposes a fixed number of channels (see `MWThermometer`),
+/// and each channel reads from one of these sources. Mirrors C++
+/// `MblMwTemperatureSource`.
 public enum MWThermometerSource: Int8, Sendable, CaseIterable {
+    /// Sentinel for unknown / out-of-range channel indices.
     case invalid          = -1
+    /// NRF SoC die temperature (always channel 0).
     case nrfDie           = 0
+    /// External thermistor wired to a GPIO pin.
     case extThermistor    = 1
+    /// Temperature sensor inside the BMP280 barometer.
     case bmp280           = 2
+    /// On-board preset thermistor (RPro only).
     case presetThermistor = 3
 }
 
@@ -86,6 +96,10 @@ public extension MWTemperatureChannel {
 // `MWReadable` sensors rather than calling `device.readTemperature(channel:)`
 // directly.
 
+/// One-shot temperature read from a single channel of the multi-channel
+/// temperature module (0x04). Drop-in `MWReadable` wrapper around a channel
+/// index; use `silent: true` to issue the read without firing the
+/// notification dispatcher.
 public struct MWThermometer: MWReadable {
     public typealias Sample = Float   // Celsius
 
@@ -112,6 +126,17 @@ public struct MWThermometer: MWReadable {
     }
 }
 
+// MARK: - MWPolledLoggable
+//
+// Temperature read responses are `[module=0x04, register=0x81, channel, lo, hi]`
+// — three bytes of payload after the BLE header: the channel byte plus a signed
+// Int16 (Celsius × 8). One 3-byte log chunk fits in a single 4-byte flash entry.
+extension MWThermometer: MWPolledLoggable {
+    public var logDataChunks: [(offset: UInt8, length: UInt8)] {
+        [(offset: 0, length: 3)]
+    }
+}
+
 // MARK: - External thermistor configuration
 //
 // Mirrors C++ `mbl_mw_multi_chnl_temp_configure_ext_thermistor`. Tells the
@@ -119,6 +144,9 @@ public struct MWThermometer: MWReadable {
 // the pulldown resistor.
 //   register 0x02, payload [channel, dataPin, pulldownPin, activeHigh]
 
+/// Command that configures an external thermistor's GPIO pin mapping for one
+/// channel of the temperature module. Tells the firmware which pin reads the
+/// thermistor voltage and which pin drives the pulldown resistor.
 public struct MWThermometerConfigureExt: MWCommand {
     public let channel: UInt8
     public let dataPin: UInt8

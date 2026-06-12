@@ -33,6 +33,7 @@ actor CoreBluetoothPeripheralTransport: NSObject, BLETransport {
     private var disconnectContinuation: CheckedContinuation<Void, Error>?
     private var readContinuations:  [CBUUID: CheckedContinuation<Data, Error>] = [:]
     private var writeContinuations: [CBUUID: CheckedContinuation<Void, Error>] = [:]
+    private var rssiContinuation:   CheckedContinuation<Int, Error>?
 
     // MARK: - Notification streams
 
@@ -79,6 +80,11 @@ actor CoreBluetoothPeripheralTransport: NSObject, BLETransport {
                     // Peripheral not found — fail the continuation immediately.
                     self.connectContinuation?.resume(throwing: error)
                     self.connectContinuation = nil
+                    // Release a concurrent `disconnect()` that's waiting on the
+                    // connection to settle. The peripheral never existed, so
+                    // "no longer connecting" is trivially satisfied.
+                    self.disconnectContinuation?.resume()
+                    self.disconnectContinuation = nil
                 }
             }
         }
@@ -120,18 +126,32 @@ actor CoreBluetoothPeripheralTransport: NSObject, BLETransport {
         }
     }
 
+    // MARK: - BLETransport — readRSSI
+
+    func readRSSI() async throws -> Int {
+        guard let peripheral else {
+            throw MWError.operationFailed("Cannot read RSSI: not connected")
+        }
+        if rssiContinuation != nil {
+            throw MWError.operationFailed("Another readRSSI is already in flight")
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            rssiContinuation = continuation
+            peripheral.readRSSI()
+        }
+    }
+
     // MARK: - BLETransport — notifications
 
     func notifications(from characteristic: CBUUID) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { [weak self] continuation in
-            guard let self else { return }
-            Task {
-                await self.beginNotifications(characteristic: characteristic, continuation: continuation)
-            }
-            continuation.onTermination = { [weak self] _ in
-                Task { await self?.endNotifications(characteristic: characteristic) }
-            }
+        let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+        Task {
+            await self.beginNotifications(characteristic: characteristic, continuation: continuation)
         }
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.endNotifications(characteristic: characteristic) }
+        }
+        return stream
     }
 
     // MARK: - Callbacks from MWCentralManager
@@ -149,6 +169,16 @@ actor CoreBluetoothPeripheralTransport: NSObject, BLETransport {
         mwLog("[BLE] PeripheralTransport handleFailedToConnect: \(error.localizedDescription)")
         connectContinuation?.resume(throwing: error)
         connectContinuation = nil
+
+        // If a `disconnect()` is in flight (because the user cancelled a pending
+        // connection by calling disconnect() before connect() resolved), iOS
+        // fires `didFailToConnect` instead of `didDisconnectPeripheral`. We
+        // need to resume the disconnect continuation here too — the
+        // peripheral is no longer trying to connect, which is exactly what
+        // disconnect() asked for. Without this, disconnect() hangs forever.
+        disconnectContinuation?.resume()
+        disconnectContinuation = nil
+
         peripheral = nil
     }
 
@@ -188,6 +218,15 @@ actor CoreBluetoothPeripheralTransport: NSObject, BLETransport {
     private func endNotifications(characteristic: CBUUID) {
         notifyContinuations.removeValue(forKey: characteristic)
         guard let peripheral, let char = characteristics[characteristic] else { return }
+        // Skip the unsubscribe write if the peripheral is no longer connected.
+        // `endNotifications` runs from the AsyncThrowingStream's onTermination
+        // handler via a hop onto this actor, which can race against an in-
+        // flight `disconnect()` — by the time the hop lands, the peripheral
+        // may already be in `.disconnecting` (or `.disconnected`), and any
+        // command issued in that window triggers a Core Bluetooth
+        // "API MISUSE" warning. The radio tears down its own subscriptions on
+        // disconnect anyway, so the write is redundant in that case.
+        guard peripheral.state == .connected else { return }
         peripheral.setNotifyValue(false, for: char)
     }
 
@@ -283,6 +322,15 @@ extension CoreBluetoothPeripheralTransport: CBPeripheralDelegate {
         Task { await self.drainWriteQueue() }
     }
 
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didReadRSSI RSSI: NSNumber,
+        error: Error?
+    ) {
+        let value = RSSI.intValue
+        Task { await self.handleReadRSSI(rssi: value, error: error) }
+    }
+
     // MARK: - Actor-isolated handlers (Sendable parameters only)
 
     private func succeedConnect() {
@@ -319,5 +367,14 @@ extension CoreBluetoothPeripheralTransport: CBPeripheralDelegate {
             writeContinuations[uuid]?.resume()
         }
         writeContinuations.removeValue(forKey: uuid)
+    }
+
+    private func handleReadRSSI(rssi: Int, error: Error?) {
+        if let error {
+            rssiContinuation?.resume(throwing: error)
+        } else {
+            rssiContinuation?.resume(returning: rssi)
+        }
+        rssiContinuation = nil
     }
 }

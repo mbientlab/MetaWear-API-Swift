@@ -37,6 +37,9 @@ public extension MWSignal {
 // MARK: - Known input signals
 
 /// Switch button state (1 byte, unsigned).
+///
+/// Feed into a `Counter` to count presses, or into a `Comparator` to react to
+/// specific press/release transitions.
 public struct MWSwitchSignal: MWSignal, Sendable {
     public var moduleID: UInt8   { MWModule.switch_.rawValue }
     public var registerID: UInt8 { 0x01 }
@@ -49,6 +52,9 @@ public struct MWSwitchSignal: MWSignal, Sendable {
 }
 
 /// Raw 3-axis accelerometer data (3 × Int16 = 6 bytes, signed).
+///
+/// Use as the source of an `RMS`/`RSS` processor to reduce to magnitude, then
+/// `Threshold` or `Pulse` for activity detection.
 public struct MWAccelerometerSignal: MWSignal, Sendable {
     public var moduleID: UInt8    { MWModule.accelerometer.rawValue }
     public var registerID: UInt8  { 0x04 }
@@ -61,6 +67,9 @@ public struct MWAccelerometerSignal: MWSignal, Sendable {
 }
 
 /// Raw 3-axis gyroscope data (3 × Int16 = 6 bytes, signed).
+///
+/// Pair with a `Buffer` + `Fuser` to bundle gyro samples alongside accelerometer
+/// data in a single packet.
 public struct MWGyroscopeSignal: MWSignal, Sendable {
     public var moduleID: UInt8    { MWModule.gyro.rawValue }
     public var registerID: UInt8  { 0x05 }
@@ -73,6 +82,9 @@ public struct MWGyroscopeSignal: MWSignal, Sendable {
 }
 
 /// GPIO analog ADC reading (1 × UInt16 = 2 bytes, unsigned).
+///
+/// Wraps the analog input on a specific pin so it can be wired into a processor
+/// (e.g. `Pulse` for spike detection on an external sensor).
 public struct MWGPIOAnalogSignal: MWSignal, Sendable {
     public var moduleID: UInt8    { MWModule.gpio.rawValue }
     public var registerID: UInt8  // 0x07 ADC, 0x06 absolute
@@ -82,7 +94,13 @@ public struct MWGPIOAnalogSignal: MWSignal, Sendable {
     public var offset: UInt8      { 0 }
     public var isSigned: Bool     { false }
 
-    public enum Mode { case adc, absolute }
+    /// Which analog read register to source from.
+    public enum Mode {
+        /// Raw ADC counts (register 0x07).
+        case adc
+        /// Absolute voltage reference reading (register 0x06).
+        case absolute
+    }
     public init(pin: UInt8, mode: Mode = .adc) {
         self.dataID      = pin
         self.registerID  = mode == .adc ? 0x07 : 0x06
@@ -90,6 +108,9 @@ public struct MWGPIOAnalogSignal: MWSignal, Sendable {
 }
 
 /// Single temperature channel (1 × Int16 = 2 bytes, signed).
+///
+/// Pick a specific thermistor / on-die source via the `channel` index. Often
+/// paired with a `Comparator` to fire an event when temperature crosses a setpoint.
 public struct MWTemperatureSignal: MWSignal, Sendable {
     public var moduleID: UInt8    { MWModule.temperature.rawValue }
     public var registerID: UInt8  { UInt8(0x01 | 0x80 | 0x40) }  // 0xC1 (read + data_id)
@@ -99,6 +120,86 @@ public struct MWTemperatureSignal: MWSignal, Sendable {
     public var offset: UInt8      { 0 }
     public var isSigned: Bool     { true }
     public init(channel: UInt8 = 0) { self.dataID = channel }
+}
+
+// MARK: - Sensor fusion signals
+//
+// Each fusion output (quaternion, euler, gravity, linear-accel, corrected-acc/
+// gyro/mag) is exposed as both an `MWLoggable` (`MWSensorFusionEuler`,
+// `MWSensorFusionQuaternion`, etc., in `MWSensorFusion.swift`) and as an
+// `MWSignal` here. The signal form is what `createProcessor(_:source:)` and
+// `createTimer(...)` consume — it carries just enough metadata for the board
+// to wire the signal as a processor input. Sensor lifecycle (configure /
+// enable / start / stop / disable) remains the caller's responsibility via
+// the `MWLoggable` form.
+//
+// Wire layout per `MblMwSensorFusion` register table:
+//   0x04 CORRECTED_ACC / GYRO / MAG  → 13 bytes (3 × float32 + 1 byte accuracy)
+//   0x07 QUATERNION                  → 16 bytes (4 × float32, Q16.16 raw)
+//   0x08 EULER_ANGLES                → 16 bytes (4 × float32, Q16.16 raw)
+//   0x09 GRAVITY                     → 12 bytes (3 × float32, Q16.16 raw)
+//   0x0A LINEAR_ACC                  → 12 bytes (3 × float32, Q16.16 raw)
+//
+// All channelSize values are 4 (single float32 per axis).
+
+/// Quaternion output of sensor fusion (4 × float32 = 16 bytes, signed).
+///
+/// Use this `MWSignal` form to feed orientation into a processor pipeline.
+/// Sensor lifecycle (configure / start / stop) is still driven by the
+/// matching `MWSensorFusionQuaternion` loggable.
+public struct MWSensorFusionQuaternionSignal: MWSignal, Sendable {
+    public var moduleID: UInt8    { MWModule.sensorFusion.rawValue }
+    public var registerID: UInt8  { 0x07 }
+    public var dataID: UInt8      { 0xFF }
+    public var nChannels: UInt8   { 4 }
+    public var channelSize: UInt8 { 4 }
+    public var offset: UInt8      { 0 }
+    public var isSigned: Bool     { true }
+    public init() {}
+}
+
+/// Euler-angles output of sensor fusion (4 × float32 = 16 bytes, signed).
+///
+/// `MWSignal` form of `MWSensorFusionEuler` for use as a processor source.
+public struct MWSensorFusionEulerSignal: MWSignal, Sendable {
+    public var moduleID: UInt8    { MWModule.sensorFusion.rawValue }
+    public var registerID: UInt8  { 0x08 }
+    public var dataID: UInt8      { 0xFF }
+    public var nChannels: UInt8   { 4 }
+    public var channelSize: UInt8 { 4 }
+    public var offset: UInt8      { 0 }
+    public var isSigned: Bool     { true }
+    public init() {}
+}
+
+/// Gravity-vector output of sensor fusion (3 × float32 = 12 bytes, signed).
+///
+/// `MWSignal` form of `MWSensorFusionGravity` for use as a processor source —
+/// e.g. an `RSS` magnitude to detect a free-fall transition.
+public struct MWSensorFusionGravitySignal: MWSignal, Sendable {
+    public var moduleID: UInt8    { MWModule.sensorFusion.rawValue }
+    public var registerID: UInt8  { 0x09 }
+    public var dataID: UInt8      { 0xFF }
+    public var nChannels: UInt8   { 3 }
+    public var channelSize: UInt8 { 4 }
+    public var offset: UInt8      { 0 }
+    public var isSigned: Bool     { true }
+    public init() {}
+}
+
+/// Linear-acceleration output of sensor fusion (3 × float32 = 12 bytes, signed).
+///
+/// `MWSignal` form of `MWSensorFusionLinearAcceleration` for use as a processor
+/// source — gravity-compensated acceleration suitable for motion-impulse detection.
+public struct MWSensorFusionLinearAccelerationSignal: MWSignal, Sendable {
+    public var moduleID: UInt8    { MWModule.sensorFusion.rawValue }
+    public var registerID: UInt8  { 0x0A }
+    public var dataID: UInt8      { 0xFF }
+    public var nChannels: UInt8   { 3 }
+    public var channelSize: UInt8 { 4 }
+    public var offset: UInt8      { 0 }
+    public var isSigned: Bool     { true }
+    public init() {}
 }
 
 // MARK: - Processor handle (result of createProcessor; also a signal for chaining)
@@ -140,6 +241,13 @@ public protocol MWDataProcessorConfig: Sendable {
 // MARK: - Processor implementations
 
 /// Namespace for all data processor configuration types.
+///
+/// Each nested struct (`Passthrough`, `Accumulator`, `Counter`, `Average`, `RMS`,
+/// `RSS`, `Time`, `Math`, `Sample`, `Comparator`, `Threshold`, `Delta`, `Pulse`,
+/// `Buffer`, `Packer`, `Accounter`, `Fuser`) configures a single on-board
+/// processor stage. Pass one to `MetaWearDevice.createProcessor(_:source:)` to
+/// instantiate it, and chain processors by using the returned `MWProcessorHandle`
+/// as the source of a subsequent call.
 public enum MWDataProcessor {}
 
 // MARK: Passthrough  (type 0x01)
@@ -147,9 +255,19 @@ public enum MWDataProcessor {}
 public extension MWDataProcessor {
 
     /// Gates data flow — pass all, pass conditionally, or pass N times then stop.
+    ///
+    /// Chain after any source to throttle delivery, or combine with an event
+    /// that toggles the gate at runtime to implement an on/off switch in the
+    /// processor graph.
     struct Passthrough: MWDataProcessorConfig, Sendable {
+        /// How the passthrough gate decides whether to forward a sample.
         public enum Mode: UInt8, Sendable {
-            case all = 0, conditional = 1, count = 2
+            /// Forward every sample.
+            case all = 0
+            /// Forward only while an external `count` write opens the gate.
+            case conditional = 1
+            /// Forward the first `count` samples then stop.
+            case count = 2
         }
         public let mode: Mode
         /// Pass-count for `.count` mode (ignored otherwise).
@@ -177,6 +295,11 @@ public extension MWDataProcessor {
 
     /// Accumulates (sums) values. The `mode` byte in `AccumulatorConfig` is 0 (SUM).
     ///
+    /// Each incoming sample is added to the running total. Useful for integrating
+    /// magnitude over time (e.g. step count proxy from RSS-of-accel) or any
+    /// "total movement" metric. Pair with a `Comparator` to fire when the sum
+    /// passes a threshold.
+    ///
     /// Config byte: `{output_size-1 : 2, input_size-1 : 2, mode=0 : 3}`
     struct Accumulator: MWDataProcessorConfig, Sendable {
         public let outputSize: UInt8   // 1, 2, or 4
@@ -194,6 +317,11 @@ public extension MWDataProcessor {
     }
 
     /// Counts events (mode = 1 = COUNT in AccumulatorConfig).
+    ///
+    /// Emits a monotonically-increasing tally — one increment per input sample,
+    /// regardless of the input's value. Often chained with `Math.modulo` to drive
+    /// an alternating output (odd/even LED toggle) or with `Comparator` to fire
+    /// every Nth event.
     ///
     /// Config byte: `{output_size-1 : 2, 0 : 2, mode=1 : 3}`
     ///
@@ -219,7 +347,11 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Computes a rolling average (low-pass filter).
+    /// Computes a rolling average (low-pass filter) over the last `sampleSize` inputs.
+    ///
+    /// Use to smooth a noisy stream on-device, reducing both jitter and BLE
+    /// traffic. Chain after `Math` or `RSS` to clean their output before a
+    /// `Threshold` or `Comparator` consumes it.
     ///
     /// `AverageConfig`: byte0 `{output-1:2, input-1:2, _:1, mode=0:1, _:2}`, byte1 `sampleSize`.
     ///
@@ -248,6 +380,10 @@ public extension MWDataProcessor {
 
     /// Root-mean-square combiner. Reduces a multi-axis signal to a scalar magnitude.
     ///
+    /// Use on a 3-axis sensor (accel/gyro/mag) to collapse it to a single
+    /// "energy" value. `RSS` is more common for pure magnitude; `RMS` divides
+    /// by N first, which suits power-style metrics.
+    ///
     /// `CombinerConfig`: `{output-1:2, input-1:2, channels-1:3, is_signed:1, mode=0}`.
     ///
     /// Reference test: `test_freefall` (accelerometer RSS):
@@ -256,6 +392,13 @@ public extension MWDataProcessor {
         public init() {}
         public let typeID: UInt8 = 0x07
         public func configBytes(inputLength: UInt8, inputChannels: UInt8, inputSigned: Bool) -> [UInt8] {
+            // RMS/RSS combiner wire layout (2 bytes — same for both modes):
+            //   byte 0:  bits [1:0] = output_unit - 1     (size of each output scalar)
+            //            bits [3:2] = input_unit  - 1     (size of each input scalar)
+            //            bits [6:4] = n_channels - 1      (1..8 channels → 0..7)
+            //            bit  [7]   = input_signed flag
+            //   byte 1:  mode                              (0 = RMS, 1 = RSS)
+            // RMS and RSS share the same combiner type (0x07); only byte 1 differs.
             let unit = inputLength / max(inputChannels, 1)
             let s    = (unit - 1) & 0x3
             let byte0: UInt8 = s | (s << 2) | (((inputChannels - 1) & 0x7) << 4) | (inputSigned ? 0x80 : 0)
@@ -266,11 +409,17 @@ public extension MWDataProcessor {
         public func outputSigned(inputSigned: Bool) -> Bool { false }
     }
 
-    /// Root-sum-square combiner.
+    /// Root-sum-square combiner. Reduces a multi-axis signal to its vector magnitude.
+    ///
+    /// Computes `sqrt(x² + y² + z²)` on-device — the standard "how much is it
+    /// accelerating" or "how strong is the field" value. Chain into `Threshold`
+    /// or `Pulse` to detect motion / free-fall / step events without burning BLE.
     struct RSS: MWDataProcessorConfig, Sendable {
         public init() {}
         public let typeID: UInt8 = 0x07
         public func configBytes(inputLength: UInt8, inputChannels: UInt8, inputSigned: Bool) -> [UInt8] {
+            // See `RMS.configBytes` for byte 0 layout — RSS uses the same combiner
+            // type (0x07) and same per-byte layout; only byte 1 (mode) is 0x01.
             let unit = inputLength / max(inputChannels, 1)
             let s    = (unit - 1) & 0x3
             let byte0: UInt8 = s | (s << 2) | (((inputChannels - 1) & 0x7) << 4) | (inputSigned ? 0x80 : 0)
@@ -286,12 +435,21 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Passes one sample per `periodMs` milliseconds.
+    /// Down-samples a stream by emitting at most one sample per `periodMs` milliseconds.
+    ///
+    /// Drop a high-rate sensor's effective rate (e.g. 100 Hz accel → 10 Hz)
+    /// without changing the underlying ODR. `.differential` mode emits the
+    /// difference between the current and previous sample instead of the value
+    /// itself — useful for computing rate-of-change cheaply on-device.
     ///
     /// `TimeDelayConfig`: `{data_length-1:3, mode:3, _:2, period[4]}`.
     struct Time: MWDataProcessorConfig, Sendable {
+        /// How the time-delay stage selects its output value.
         public enum Mode: UInt8, Sendable {
-            case absolute = 0, differential = 1
+            /// Emit the latest input sample verbatim at each tick.
+            case absolute = 0
+            /// Emit `current - previous` at each tick (on-device differentiation).
+            case differential = 1
         }
         public let periodMs: UInt32
         public let mode: Mode
@@ -303,6 +461,11 @@ public extension MWDataProcessor {
 
         public let typeID: UInt8 = 0x08
         public func configBytes(inputLength: UInt8, inputChannels: UInt8, inputSigned: Bool) -> [UInt8] {
+            // TimeConfig byte 0 wire layout:
+            //   bits [2:0] = input_length - 1   (signal sample size, 1..4 bytes → 0..3)
+            //   bits [5:3] = mode               (0 absolute, 1 differential)
+            //   bits [7:6] = reserved (must be 0)
+            // Followed by `period_ms` as a 32-bit little-endian unsigned int.
             let byte0: UInt8 = ((inputLength - 1) & 0x7) | ((mode.rawValue & 0x7) << 3)
             return [byte0] + littleEndian32(periodMs)
         }
@@ -316,17 +479,49 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Arithmetic transform applied per sample.
+    /// Arithmetic transform applied per sample — `output = op(input, rhs)`.
+    ///
+    /// Use to scale, offset, mod, or otherwise reshape a stream before it
+    /// reaches a downstream stage. Combined with `Counter` and `.modulo` it
+    /// implements a divide-by-N event splitter (see `test_led_controller`).
     ///
     /// `MathConfig`: `{output-1:2, input-1:2, signed:1, _:3, operation, rhs[4], n_channels}`.
     ///
     /// Reference test: `test_led_controller` (counter % 2):
     /// `[0x03, 0x04, 0x02, 0x00, 0x00, 0x00, 0x00]` — output=4, input=1, unsigned, MODULO, rhs=2, ch=0 ✓
     struct Math: MWDataProcessorConfig, Sendable {
-        public enum Operation: UInt8, Sendable {
-            case add = 0, subtract = 1, multiply = 2, divide = 3, modulo = 4
-            case exponent = 5, sqrt = 6, lshift = 7, rshift = 8, abs = 9
-            case constant = 10, negate = 11, floor = 12, ceil = 13, round = 14
+        /// Per-sample arithmetic operator. Most take `rhs`; some are unary.
+        ///
+        /// Raw values are the **firmware op codes**, written to the wire verbatim
+        /// (verified against `MblMwMathOperation` in MetaWear-SDK-Cpp, where the
+        /// enum starts at 1 and `MathConfig.operation = op` with no translation).
+        /// Note the non-obvious ordering: `subtract` is 9, not 1 — an earlier
+        /// draft of this enum used a 0-indexed table from a buggy protocol
+        /// document, which made `.add` a no-op and `.subtract` perform addition.
+        /// There are no negate/floor/ceil/round operations in firmware.
+        public enum Operation: UInt8, Sendable, CaseIterable {
+            /// `output = input + rhs`.
+            case add = 1
+            /// `output = input * rhs`.
+            case multiply = 2
+            /// `output = input / rhs`.
+            case divide = 3
+            /// `output = input % rhs`.
+            case modulo = 4
+            /// `output = input ^ rhs`.
+            case exponent = 5
+            /// `output = sqrt(input)` (rhs ignored).
+            case sqrt = 6
+            /// Left bit-shift: `output = input << rhs`.
+            case lshift = 7
+            /// Right bit-shift: `output = input >> rhs`.
+            case rshift = 8
+            /// `output = input - rhs`.
+            case subtract = 9
+            /// `output = |input|` (rhs ignored).
+            case abs = 10
+            /// `output = rhs` (input ignored — emits a constant on every fire).
+            case constant = 11
         }
 
         public let operation: Operation
@@ -345,6 +540,14 @@ public extension MWDataProcessor {
 
         public let typeID: UInt8 = 0x09
         public func configBytes(inputLength: UInt8, inputChannels: UInt8, inputSigned: Bool) -> [UInt8] {
+            // MathConfig wire layout (7 bytes):
+            //   byte 0:  bits [1:0] = output_unit - 1   (per-channel output byte size, 1..4 → 0..3)
+            //            bits [3:2] = input_unit - 1    (per-channel input byte size)
+            //            bit  [4]   = signed flag
+            //            bits [7:5] = reserved (must be 0)
+            //   byte 1:  operation enum (Operation.rawValue)
+            //   bytes 2–5: rhs (Int32 little-endian, sign-preserving via bitPattern)
+            //   byte 6:  n_channels - 1   (encodes 1..N channels as 0..N-1, but 0 if N == 1)
             let unitIn  = inputLength / max(inputChannels, 1)
             let unitOut = outputSize ?? unitIn
             let byte0: UInt8 = ((unitOut - 1) & 0x3)
@@ -366,7 +569,10 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Buffers N samples and emits them as a single burst.
+    /// Buffers `binSize` samples and emits them in one burst when full.
+    ///
+    /// Useful for ML-style windowing — capture N consecutive samples then ship
+    /// them as a single packet for further on-device processing or BLE delivery.
     ///
     /// `SampleDelayConfig`: `{data_length-1, bin_size}`.
     struct Sample: MWDataProcessorConfig, Sendable {
@@ -390,16 +596,52 @@ public extension MWDataProcessor {
 
     /// Compares each sample against a fixed reference, passing samples that satisfy the condition.
     ///
-    /// `ComparatorConfig` (7 bytes): `is_signed(1), operation(1), padding(1), reference[4]`.
+    /// On firmware ≥ 1.2.3 (everything shipped to MetaMotion R / RL / S / C since 2017)
+    /// the firmware expects the **multi-comparator** config layout — even when there's
+    /// only one reference. The legacy single-comparator config (`is_signed(1), op(1),
+    /// padding(1), ref[4]`) was deprecated, and modern firmware misreads its bytes,
+    /// causing both comparators in a chain to compare against the same value (whichever
+    /// happens to land at the position of references[0]). That manifests on hardware as
+    /// "isOdd and isEven both fire on every press" — see
+    /// `EventTests.events_oddEvenPresses_alternateLEDColors`.
     ///
-    /// Reference test: `test_freefall` (EQ -1 and EQ 1 on BINARY threshold output):
-    /// `[0x01, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF]` — signed, EQ, ref=-1 ✓
+    /// **Wire format we emit (multi-comparator with a single reference):**
+    /// ```
+    /// byte 0 (bit-packed, LSB first):
+    ///   bit 0      is_signed
+    ///   bits 1-2   length     (size_per_ref - 1: 0=1B, 1=2B, 3=4B)
+    ///   bits 3-5   operation  (eq=0, neq=1, lt=2, lte=3, gt=4, gte=5)
+    ///   bits 6-7   mode       (always 0 = ABSOLUTE — emit input on match)
+    /// bytes 1..N: reference[size_per_ref], little-endian
+    /// ```
+    /// Reference per scalar in/out is `inputLength / max(inputChannels, 1)`.
+    ///
+    /// Reference test: C++ `TestMultiComparator.test_absolute` on a 2-byte unsigned
+    /// temperature signal with EQ + 3 refs (24, 25, 26 °C) yields
+    /// `[0x03, 0xC0, 0x00, 0xC8, 0x00, 0xD0, 0x00]` — byte 0 = is_signed(0)
+    /// | length(1<<1) | op(0<<3) | mode(0<<6) = 0x02 + the inputSigned bit ANDed in by
+    /// the firmware's temperature signal (signed). The bit layout decodes the same way
+    /// for our single-reference call — see unit-test bytes in `MWDataProcessorTests`.
     struct Comparator: MWDataProcessorConfig, Sendable {
+        /// Comparison predicate applied to each input against the `reference` value.
         public enum Operation: UInt8, Sendable {
-            case eq = 0, neq = 1, lt = 2, lte = 3, gt = 4, gte = 5
+            /// Pass samples where `input == reference`.
+            case eq = 0
+            /// Pass samples where `input != reference`.
+            case neq = 1
+            /// Pass samples where `input < reference`.
+            case lt = 2
+            /// Pass samples where `input <= reference`.
+            case lte = 3
+            /// Pass samples where `input > reference`.
+            case gt = 4
+            /// Pass samples where `input >= reference`.
+            case gte = 5
         }
         public let operation: Operation
+        /// Value to compare each input against (already scaled to board units).
         public let reference: Int32
+        /// Whether the input values are signed (determines compare semantics).
         public let signed: Bool
 
         public init(operation: Operation, reference: Int32, signed: Bool = true) {
@@ -410,8 +652,17 @@ public extension MWDataProcessor {
 
         public let typeID: UInt8 = 0x06
         public func configBytes(inputLength: UInt8, inputChannels: UInt8, inputSigned: Bool) -> [UInt8] {
-            [signed ? 1 : 0, operation.rawValue, 0x00]
-            + littleEndian32(UInt32(bitPattern: reference))
+            // Per-scalar size: 1, 2, or 4 bytes. Clamp so totally-unexpected widths
+            // don't produce out-of-range length bits.
+            let unitSize = max(min(inputLength / max(inputChannels, 1), 4), 1)
+            let lengthBits = (unitSize - 1) & 0x3
+            let opBits     = operation.rawValue & 0x7
+            let byte0: UInt8 = (signed ? 1 : 0)
+                             | (lengthBits << 1)
+                             | (opBits     << 3)
+                             // mode bits 6-7 = 0 (ABSOLUTE)
+            let refLE = littleEndian32(UInt32(bitPattern: reference))
+            return [byte0] + Array(refLE.prefix(Int(unitSize)))
         }
         public func outputLength(inputLength: UInt8, inputChannels: UInt8)  -> UInt8 { inputLength }
         public func outputChannels(inputLength: UInt8, inputChannels: UInt8) -> UInt8 { inputChannels }
@@ -423,7 +674,12 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Emits a value when the input crosses a boundary.
+    /// Emits a value only when the input crosses a boundary, with optional hysteresis.
+    ///
+    /// Unlike `Comparator` (which fires for every sample satisfying the
+    /// predicate), `Threshold` only fires on the transition across `boundary`.
+    /// Pair `.binary` mode with an `Event` to trigger an LED/haptic on crossing.
+    /// Use `hysteresis > 0` to debounce noisy inputs near the boundary.
     ///
     /// `ThresholdConfig` (7 bytes): `{data_size-1:2, is_signed:1, mode:3}, boundary[4], hysteresis[2]`.
     ///
@@ -431,15 +687,19 @@ public extension MWDataProcessor {
     /// `[0x09, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00]`
     ///  — size=2, unsigned, binary=1, boundary=0x2000=8192, hyst=0 ✓
     struct Threshold: MWDataProcessorConfig, Sendable {
+        /// How the threshold stage encodes a boundary crossing.
         public enum Mode: UInt8, Sendable {
             /// Output the raw value (filtered to only when crossing).
             case absolute = 0
             /// Output +1 when above, –1 when below.
             case binary   = 1
         }
+        /// Threshold value (already scaled to board units / LSBs).
         public let boundary: Int32
+        /// Dead-band around `boundary`: input must move this far past the line to fire again.
         public let hysteresis: UInt16
         public let mode: Mode
+        /// Whether the input values are signed.
         public let signed: Bool
 
         public init(boundary: Int32,
@@ -454,6 +714,13 @@ public extension MWDataProcessor {
 
         public let typeID: UInt8 = 0x0D
         public func configBytes(inputLength: UInt8, inputChannels: UInt8, inputSigned: Bool) -> [UInt8] {
+            // ThresholdConfig wire layout (7 bytes):
+            //   byte 0:  bits [1:0] = data_size - 1   (per-scalar bytes, 1..4 → 0..3)
+            //            bit  [2]   = is_signed flag
+            //            bits [5:3] = mode             (0 absolute, 1 binary)
+            //            bits [7:6] = reserved
+            //   bytes 1–4: boundary (Int32 little-endian)
+            //   bytes 5–6: hysteresis (UInt16 little-endian)
             let unitSize = inputLength / max(inputChannels, 1)
             let byte0: UInt8 = ((unitSize - 1) & 0x3)
                              | ((signed ? 1 : 0) << 2)
@@ -475,13 +742,20 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Emits a sample only when the input differs from the last reference by at least `magnitude`.
+    /// Emits a sample only when the input has moved at least `magnitude` from
+    /// the last value it emitted ("change-on-delta" filter).
+    ///
+    /// Use to suppress redundant samples from a noisy or slow-moving signal —
+    /// e.g. only stream a barometer reading when pressure changes by ≥10 Pa.
+    /// Each emission also updates the internal reference so deltas accumulate
+    /// from the last fire, not the start of the stream.
     ///
     /// `DeltaConfig` (5 bytes): byte0 `{length-1:2, is_signed:1, mode:3, _:2}`, bytes1-4 `magnitude[int32 LE]`.
     ///
     /// Reference test: `TestDeltaSetPrevious` (barometer pressure, mode DIFFERENTIAL, magnitude 25331.25 Pa).
     /// The magnitude is passed pre-scaled to board units; use your sensor's firmware converter.
     struct Delta: MWDataProcessorConfig, Sendable {
+        /// What value the delta stage emits when the threshold is crossed.
         public enum Mode: UInt8, Sendable {
             case absolute     = 0   ///< Output the raw input on each threshold crossing.
             case differential = 1   ///< Output the raw delta from the last reference.
@@ -498,6 +772,12 @@ public extension MWDataProcessor {
 
         public let typeID: UInt8 = 0x0C
         public func configBytes(inputLength: UInt8, inputChannels: UInt8, inputSigned: Bool) -> [UInt8] {
+            // DeltaConfig wire layout (5 bytes):
+            //   byte 0:  bits [1:0] = input_length - 1   (per-scalar bytes, 1..4 → 0..3)
+            //            bit  [2]   = is_signed flag
+            //            bits [5:3] = mode               (0 absolute, 1 differential, 2 binary)
+            //            bits [7:6] = reserved
+            //   bytes 1–4: magnitude (Int32 little-endian, already in board units)
             let byte0: UInt8 = ((inputLength - 1) & 0x3)
                              | ((inputSigned ? 1 : 0) << 2)
                              | ((mode.rawValue & 0x7) << 3)
@@ -516,7 +796,13 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Detects pulses in the input stream and emits one sample per pulse.
+    /// Detects pulses (sustained excursions above `threshold` for ≥ `width` samples)
+    /// and emits one summary value per pulse.
+    ///
+    /// Classic use: a step-detector — RSS-of-accel into a `Pulse` with the right
+    /// threshold/width emits one sample per step. The `output` field controls
+    /// what each emission represents (duration, area, peak, or just a "happened"
+    /// flag), which lets the same processor serve very different downstream goals.
     ///
     /// `PulseDetectorConfig` (9 bytes): `length, trigger_mode=0, output_mode, threshold[4], width[2]`.
     ///
@@ -526,6 +812,7 @@ public extension MWDataProcessor {
     ///  - `test_pulse_setup` (GPIO ADC PEAK 500, width 10) →
     ///    `[0x01, 0x00, 0x02, 0xF4, 0x01, 0x00, 0x00, 0x0A, 0x00]` ✓
     struct Pulse: MWDataProcessorConfig, Sendable {
+        /// What value the pulse-detector emits per detected pulse.
         public enum Output: UInt8, Sendable {
             case width    = 0   ///< Pulse duration (samples above threshold).
             case area     = 1   ///< Integrated area above threshold.
@@ -565,8 +852,12 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Buffers the most recent sample without emitting anything on its own — the value
-    /// is retrieved by an event or read, or referenced by a `Fuser` stage.
+    /// Holds the most recent sample without emitting anything on its own.
+    ///
+    /// The buffered value can be pulled by a separate `Event`/read, or referenced
+    /// as a secondary input of a `Fuser` to bundle that sensor's latest reading
+    /// alongside another stream — without ever having to subscribe to the
+    /// buffered signal directly.
     ///
     /// `BufferConfig` (1 byte): `{length-1:5, _:3}`.
     ///
@@ -588,7 +879,11 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Combines `count` consecutive samples into a single BLE packet to reduce overhead.
+    /// Bundles `count` consecutive samples into a single BLE packet to reduce overhead.
+    ///
+    /// BLE has high per-packet overhead; packing 4–8 samples at a time can
+    /// significantly raise sustainable streaming rates. The downstream parser
+    /// must split the packet back into individual samples.
     ///
     /// `PackerConfig` (2 bytes): byte0 `{length-1:5, _:3}`, byte1 `{count-1:5, _:3}`.
     ///
@@ -614,8 +909,13 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Prepends a timestamp or packet counter to each sample, used by the logger to
-    /// reconstruct timing for bundled streams.
+    /// Prepends a timestamp or packet counter to each sample so the logger can
+    /// reconstruct precise timing when log entries are downloaded out of order.
+    ///
+    /// Required upstream of `Logger` when multiple signals share a single
+    /// logger channel (e.g. a `Fuser`'s output), so the host can disambiguate
+    /// which sample came from when. `.time` is the usual choice; `.count` is
+    /// for verifying packet ordering / drop detection.
     ///
     /// `AccounterConfig` (2 bytes): byte0 `{mode:4, length-1:2, _:2}`, byte1 `{prescale:4, _:4}`.
     /// Firmware pins length to 4 bytes and prescale to 3 to match the logger's wire format.
@@ -624,6 +924,7 @@ public extension MWDataProcessor {
     ///  - `TestAccounter.test_create` (mode=time) → `[0x31, 0x03]` ✓
     ///  - `TestAccounterCount.test_create` (mode=count) → `[0x30, 0x03]` ✓
     struct Accounter: MWDataProcessorConfig, Sendable {
+        /// What value the accounter prepends to each sample.
         public enum Mode: UInt8, Sendable {
             case count = 0  ///< Prepend a monotonically-increasing packet counter.
             case time  = 1  ///< Prepend a compact epoch offset (ms since boot).
@@ -638,6 +939,12 @@ public extension MWDataProcessor {
 
         public let typeID: UInt8 = 0x11
         public func configBytes(inputLength: UInt8, inputChannels: UInt8, inputSigned: Bool) -> [UInt8] {
+            // AccounterConfig wire layout (2 bytes):
+            //   byte 0:  bits [3:0] = mode             (0 count, 1 time)
+            //            bits [5:4] = length - 1       (prepended counter/timestamp width, fixed at 4 → bits = 3)
+            //            bits [7:6] = reserved
+            //   byte 1:  bits [3:0] = prescale         (time-mode tick prescaler, fixed at 3)
+            //            bits [7:4] = reserved
             let byte0: UInt8 = (mode.rawValue & 0x0F) | (((length - 1) & 0x3) << 4)
             let byte1: UInt8 = prescale & 0x0F
             return [byte0, byte1]
@@ -652,8 +959,13 @@ public extension MWDataProcessor {
 
 public extension MWDataProcessor {
 
-    /// Combines the latest sample from the primary source with buffered samples from
-    /// additional signals into a single multi-part packet.
+    /// Bundles the primary source with the latest samples from one or more
+    /// `Buffer` stages into a single multi-part packet.
+    ///
+    /// Use to align time-synchronous data from different sensors (e.g. accel +
+    /// gyro arriving in one packet, snapshot together at the host's wake-up
+    /// time). Each auxiliary signal must first be wrapped in a `Buffer` so the
+    /// fuser has a stable "latest" value to pull on each primary fire.
     ///
     /// `FuseConfig` (13 bytes): byte0 `{count:4, _:4}`, bytes1-12 `references[12]` — the
     /// board-assigned processor IDs of a matching number of `Buffer` stages that hold the

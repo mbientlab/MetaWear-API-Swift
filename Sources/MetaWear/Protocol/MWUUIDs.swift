@@ -17,4 +17,10 @@ public enum MWUUIDs {
     // MARK: - Standard Battery Service (0x180F)
     public static let batteryService      = CBUUID(string: "180F")
     public static let batteryLevel        = CBUUID(string: "2A19")
+
+    // Note: the Generic Access Service (0x1800) and its Device Name
+    // characteristic (0x2A00) are intentionally omitted. Apple's CoreBluetooth
+    // filters both 0x1800 and 0x1801 from service discovery on iOS/macOS, so
+    // they cannot be read by third-party apps. Use `CBPeripheral.name` (cached
+    // by the OS from scan/connect metadata) for the advertised name.
 }

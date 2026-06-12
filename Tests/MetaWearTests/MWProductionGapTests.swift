@@ -15,13 +15,20 @@ private func makeConnectedDevice() async throws -> (MetaWearDevice, MockBLETrans
 
     let device = MetaWearDevice(identifier: UUID(), transport: transport)
 
+    // Continuously poll — see MetaWearDeviceTests for the rationale on why a
+    // one-shot sleep is racy under parallel-test load.
     let discovery = Task {
-        try? await Task.sleep(nanoseconds: 15_000_000)
-        let written = await transport.writtenData
-        for (cmd, _, _) in written {
-            guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
-            let impl: UInt8 = [0x03, 0x13, 0x12, 0x15, 0x19].contains(cmd[0]) ? 0x01 : 0xFF
-            await transport.inject(notification: Data([cmd[0], 0x80, impl, 0x00]), to: MWUUIDs.notify)
+        var responded = Set<Data>()
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 3_000_000)
+            let written = await transport.writtenData
+            for (cmd, _, _) in written {
+                guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
+                guard !responded.contains(cmd) else { continue }
+                responded.insert(cmd)
+                let impl: UInt8 = [0x03, 0x13, 0x12, 0x15, 0x19].contains(cmd[0]) ? 0x01 : 0xFF
+                await transport.inject(notification: Data([cmd[0], 0x80, impl, 0x00]), to: MWUUIDs.notify)
+            }
         }
     }
     try await device.connect()
@@ -71,7 +78,13 @@ struct ReadTimeoutTests {
         let gyroTask  = Task { try await proto.read(.gyro, 0x01) }
         let accelTask = Task { try await proto.read(.accelerometer, 0x03) }
 
-        try await Task.sleep(nanoseconds: 5_000_000)
+        // Wait until both reads have written their request bytes — that's
+        // proof both continuations are parked. A fixed sleep races against
+        // task scheduling under parallel-test load.
+        for _ in 0..<200 {
+            if await transport.writtenData.count >= 2 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
 
         // Only inject the accel reply
         await transport.inject(notification: Data([0x03, 0x83, 0xFF]), to: MWUUIDs.notify)
@@ -122,13 +135,27 @@ struct ReconnectionTests {
         await transport.simulateDisconnect()
         try await Task.sleep(nanoseconds: 10_000_000)
 
-        // Re-prime the transport for reconnect
+        // Re-prime the transport for reconnect.
+        // We can't dedupe by *byte content* here — reconnect's discovery
+        // reads (e.g. `[0x03, 0x80]`) are byte-identical to the initial
+        // connect's reads. Track by *index* into writtenData instead: only
+        // consider entries past the baseline count, and within that window
+        // reply once to each unique command.
+        let baselineCount = await transport.writtenData.count
         let discovery = Task {
-            try? await Task.sleep(nanoseconds: 15_000_000)
-            let written = await transport.writtenData
-            for (cmd, _, _) in written {
-                guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
-                await transport.inject(notification: Data([cmd[0], 0x80, 0x01, 0x00]), to: MWUUIDs.notify)
+            var nextIndex = baselineCount
+            var responded = Set<Data>()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000)
+                let written = await transport.writtenData
+                while nextIndex < written.count {
+                    let cmd = written[nextIndex].0
+                    nextIndex += 1
+                    guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
+                    guard !responded.contains(cmd) else { continue }
+                    responded.insert(cmd)
+                    await transport.inject(notification: Data([cmd[0], 0x80, 0x01, 0x00]), to: MWUUIDs.notify)
+                }
             }
         }
         try await device.reconnect()
@@ -161,11 +188,11 @@ struct SensorConflictTests {
         let (device, _) = try await makeConnectedDevice()
 
         // Start sensor fusion
-        _ = try await device.stream(MWSensorFusionQuaternion(), usePacked: false)
+        _ = try await device.startStream(MWSensorFusionQuaternion(), usePacked: false)
 
         // Trying to stream accelerometer should throw
         do {
-            _ = try await device.stream(MWAccelerometerBMI160(odr: .hz100, range: .g2), usePacked: false)
+            _ = try await device.startStream(MWAccelerometerBMI160(odr: .hz100, range: .g2), usePacked: false)
             Issue.record("Expected invalidState conflict error")
         } catch let err as MWError {
             if case .invalidState = err { /* expected */ }
@@ -176,10 +203,10 @@ struct SensorConflictTests {
     @Test func accelerometer_blocksSensorFusion() async throws {
         let (device, _) = try await makeConnectedDevice()
 
-        _ = try await device.stream(MWAccelerometerBMI160(odr: .hz100, range: .g2), usePacked: false)
+        _ = try await device.startStream(MWAccelerometerBMI160(odr: .hz100, range: .g2), usePacked: false)
 
         do {
-            _ = try await device.stream(MWSensorFusionQuaternion(), usePacked: false)
+            _ = try await device.startStream(MWSensorFusionQuaternion(), usePacked: false)
             Issue.record("Expected invalidState conflict error")
         } catch let err as MWError {
             if case .invalidState = err { /* expected */ }
@@ -190,9 +217,9 @@ struct SensorConflictTests {
     @Test func accelAndGyro_canStreamTogether() async throws {
         let (device, _) = try await makeConnectedDevice()
 
-        _ = try await device.stream(MWAccelerometerBMI160(odr: .hz100, range: .g2), usePacked: false)
+        _ = try await device.startStream(MWAccelerometerBMI160(odr: .hz100, range: .g2), usePacked: false)
         // Gyro and accel are both individual IMU sensors — should NOT conflict
-        _ = try await device.stream(MWGyroscopeBMI160(odr: .hz100, range: .dps2000), usePacked: false)
+        _ = try await device.startStream(MWGyroscopeBMI160(odr: .hz100, range: .dps2000), usePacked: false)
 
         #expect(await device.state == .streaming)
     }
@@ -201,11 +228,11 @@ struct SensorConflictTests {
         let (device, _) = try await makeConnectedDevice()
 
         let acc = MWAccelerometerBMI160(odr: .hz100, range: .g2)
-        _ = try await device.stream(acc, usePacked: false)
+        _ = try await device.startStream(acc, usePacked: false)
         try await device.stopStreaming(acc)
 
         // Now fusion should be allowed
-        _ = try await device.stream(MWSensorFusionQuaternion(), usePacked: false)
+        _ = try await device.startStream(MWSensorFusionQuaternion(), usePacked: false)
         #expect(await device.state == .streaming)
     }
 }
@@ -380,9 +407,17 @@ struct SettingsCommandTests {
         #expect(cmds[0] == Data([0x11, 0x07, 0x01, 0x02, 0x03]))
     }
 
-    // test_read_battery_state: read command [0x11, 0xCC]
-    @Test func readBatteryState_readCommand_pythonVector() {
-        #expect(MWSettings.ReadBatteryState().readCommand == Data([0x11, 0xCC]))
+    // test_read_battery_state in `test_settings.py` asserts `[0x11, 0xCC]` because
+    // it calls `mbl_mw_datasignal_read` directly on a freshly-constructed signal,
+    // where the C++ constructor leaves the SILENT bit (0x40) enabled. The
+    // *production* Combine SDK always subscribes before reading (see
+    // `Combine/Read.swift::_read`), and `subscribe()` on a readable signal calls
+    // `disable_silent()` (see `datasignal.cpp` line 76). So the real wire byte
+    // ships as `0x8C`, and that is what MMS firmware actually responds to —
+    // `0xCC` is silently dropped on the firmware floor. We assert the live wire
+    // shape, not the idle-signal shape the Python unit test happens to capture.
+    @Test func readBatteryState_readCommand_matchesProductionWire() {
+        #expect(MWSettings.ReadBatteryState().readCommand == Data([0x11, 0x8C]))
     }
 
     // test_battery_state_data: b'\x11\x8c\x63\x34\x10' → BatteryState(voltage: 4148, charge: 99)

@@ -144,20 +144,41 @@ struct MWDataProcessorAddCommandTests {
         #expect(bytes == [0x09, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00])
     }
 
-    // MARK: Comparator EQ -1 (signed)  (C++ test_freefall, step 4)
-    // Expected config: [0x01, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF]
-    //   signed=1, op=EQ=0, padding=0, reference=-1=0xFFFFFFFF LE32
+    // MARK: Comparator EQ -1 (signed) on 4-byte signed input (BINARY threshold output)
+    // Expected multi-compare config (5 bytes):
+    //   byte 0 bit-packed: is_signed=1 | length=3<<1 | op=EQ=0<<3 | mode=ABS=0<<6 = 0x07
+    //   bytes 1-4: reference=-1 LE32 = 0xFF, 0xFF, 0xFF, 0xFF
+    // (Replaces the legacy 7-byte ComparatorConfig — see C++ `dataprocessor_config.cpp`,
+    //  the firmware-version branch at `MULTI_COMPARE = 1.2.3`. Modern firmware
+    //  misreads the legacy layout; we now emit multi-compare unconditionally.)
     @Test func comparator_eq_minusOne_signed_configBytes() {
         let config = MWDataProcessor.Comparator(operation: .eq, reference: -1, signed: true)
         let bytes = config.configBytes(inputLength: 4, inputChannels: 1, inputSigned: true)
-        #expect(bytes == [0x01, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
+        #expect(bytes == [0x07, 0xFF, 0xFF, 0xFF, 0xFF])
     }
 
-    // Comparator EQ +1 (signed)
+    // Comparator EQ +1 (signed) — same shape, different reference.
     @Test func comparator_eq_plusOne_signed_configBytes() {
         let config = MWDataProcessor.Comparator(operation: .eq, reference: 1, signed: true)
         let bytes = config.configBytes(inputLength: 4, inputChannels: 1, inputSigned: true)
-        #expect(bytes == [0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00])
+        #expect(bytes == [0x07, 0x01, 0x00, 0x00, 0x00])
+    }
+
+    // Comparator EQ 1 (unsigned) on a 1-byte input (e.g. modulo-2 of a counter).
+    // byte 0 = is_signed=0 | length=0<<1 | op=EQ=0<<3 | mode=ABS=0<<6 = 0x00
+    // ref = [0x01]
+    // Verifies the events_oddEvenPresses chain: each sub-comparator's reference
+    // lands in the right byte so isOdd and isEven match different values.
+    @Test func comparator_eq_one_unsigned_oneByte_configBytes() {
+        let config = MWDataProcessor.Comparator(operation: .eq, reference: 1, signed: false)
+        let bytes = config.configBytes(inputLength: 1, inputChannels: 1, inputSigned: false)
+        #expect(bytes == [0x00, 0x01])
+    }
+
+    @Test func comparator_eq_zero_unsigned_oneByte_configBytes() {
+        let config = MWDataProcessor.Comparator(operation: .eq, reference: 0, signed: false)
+        let bytes = config.configBytes(inputLength: 1, inputChannels: 1, inputSigned: false)
+        #expect(bytes == [0x00, 0x00])
     }
 }
 
@@ -221,19 +242,20 @@ struct MWDataProcessorPipelineTests {
 
     @Test func freefall_step4_comparatorEqMinusOne() async {
         // Threshold BINARY output: 1ch × 4B signed → sourceConfig = (4-1)<<5 | 0 = 0x60, proc_id=2
+        // Multi-compare config (5 bytes): byte0 packs {signed=1, length=3, op=EQ, mode=ABS} = 0x07,
+        // followed by 4-byte LE reference (-1 = 0xFFFFFFFF).
         let threshHandle = MWProcessorHandle(id: 2, nChannels: 1, channelSize: 4, isSigned: true)
         let cmd = await device.buildProcessorAddCommand(
             source: threshHandle,
             config: MWDataProcessor.Comparator(operation: .eq, reference: -1, signed: true))
         #expect(cmd[5] == 0x60)   // src_config = (4-1)<<5 = 0x60
         #expect(cmd[6] == 0x06)   // proc_type = Comparator
-        #expect(cmd[7] == 0x01)   // signed=1
-        #expect(cmd[8] == 0x00)   // op=EQ=0
-        #expect(cmd[9] == 0x00)   // padding
-        #expect(cmd[10] == 0xFF)  // ref=-1 LE32
+        #expect(cmd[7] == 0x07)   // byte0: is_signed=1 | length=3<<1 | op=EQ=0<<3 | mode=ABS=0<<6
+        #expect(cmd[8] == 0xFF)   // ref=-1 LE32 byte 0
+        #expect(cmd[9] == 0xFF)
+        #expect(cmd[10] == 0xFF)
         #expect(cmd[11] == 0xFF)
-        #expect(cmd[12] == 0xFF)
-        #expect(cmd[13] == 0xFF)
+        #expect(cmd.count == 12)  // header(7) + config(5) — no trailing padding
     }
 
     // C++ test_led_controller — two ADD commands:

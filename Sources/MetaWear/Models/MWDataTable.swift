@@ -1,5 +1,27 @@
 import Foundation
 
+// MARK: - CSV formatting helpers
+//
+// CSV byte-stability matters: tools that consume our exports parse the columns
+// numerically, and a locale-dependent decimal separator (`1,000000` instead of
+// `1.000000`) would silently corrupt downstream analysis. We pin the format to
+// POSIX locale with no thousands grouping so the wire output is byte-for-byte
+// identical regardless of the host's region settings.
+
+private let posixLocale = Locale(identifier: "en_US_POSIX")
+
+/// Six-decimal CSV format for `Float`: matches the legacy `String(format: "%.6f", _)` output.
+private let csv6Float: FloatingPointFormatStyle<Float> =
+    .number.precision(.fractionLength(6)).grouping(.never).locale(posixLocale)
+
+/// Four-decimal CSV format for `Float`: matches the legacy `String(format: "%.4f", _)` output.
+private let csv4Float: FloatingPointFormatStyle<Float> =
+    .number.precision(.fractionLength(4)).grouping(.never).locale(posixLocale)
+
+/// Three-decimal CSV format for `Double`: matches the legacy `String(format: "%.3f", _)` output.
+private let csv3Double: FloatingPointFormatStyle<Double> =
+    .number.precision(.fractionLength(3)).grouping(.never).locale(posixLocale)
+
 // MARK: - MWDataConvertible
 
 /// A sensor sample type that can express itself as named string columns for CSV export.
@@ -15,37 +37,37 @@ public protocol MWDataConvertible: Sendable {
 extension CartesianFloat: MWDataConvertible {
     public static var columnHeaders: [String] { ["x", "y", "z"] }
     public var columnValues: [String] {
-        [String(format: "%.6f", x), String(format: "%.6f", y), String(format: "%.6f", z)]
+        [x.formatted(csv6Float), y.formatted(csv6Float), z.formatted(csv6Float)]
     }
 }
 
 extension Quaternion: MWDataConvertible {
     public static var columnHeaders: [String] { ["w", "x", "y", "z"] }
     public var columnValues: [String] {
-        [String(format: "%.6f", w), String(format: "%.6f", x),
-         String(format: "%.6f", y), String(format: "%.6f", z)]
+        [w.formatted(csv6Float), x.formatted(csv6Float),
+         y.formatted(csv6Float), z.formatted(csv6Float)]
     }
 }
 
 extension EulerAngles: MWDataConvertible {
     public static var columnHeaders: [String] { ["heading", "pitch", "roll", "yaw"] }
     public var columnValues: [String] {
-        [String(format: "%.4f", heading), String(format: "%.4f", pitch),
-         String(format: "%.4f", roll),    String(format: "%.4f", yaw)]
+        [heading.formatted(csv4Float), pitch.formatted(csv4Float),
+         roll.formatted(csv4Float),    yaw.formatted(csv4Float)]
     }
 }
 
 extension CorrectedCartesianFloat: MWDataConvertible {
     public static var columnHeaders: [String] { ["x", "y", "z", "accuracy"] }
     public var columnValues: [String] {
-        [String(format: "%.6f", x), String(format: "%.6f", y),
-         String(format: "%.6f", z), "\(accuracy)"]
+        [x.formatted(csv6Float), y.formatted(csv6Float),
+         z.formatted(csv6Float), "\(accuracy)"]
     }
 }
 
 extension Float: MWDataConvertible {
     public static var columnHeaders: [String] { ["value"] }
-    public var columnValues: [String] { [String(format: "%.6f", self)] }
+    public var columnValues: [String] { [self.formatted(csv6Float)] }
 }
 
 extension Bool: MWDataConvertible {
@@ -57,8 +79,11 @@ extension Bool: MWDataConvertible {
 
 /// A named table of string rows suitable for CSV export.
 public struct MWDataTable: Sendable {
+    /// Logical name for the table (typically the sensor key, e.g. `"acceleration"`).
     public let name: String
+    /// Column header strings, in order.
     public let columns: [String]
+    /// Data rows, each as an array of strings parallel to `columns`.
     public let rows: [[String]]
 
     public init(name: String, columns: [String], rows: [[String]]) {
@@ -81,7 +106,7 @@ public extension MWDataTable {
         let iso = ISO8601DateFormatter()
         let columns = ["epoch", "elapsed_ms"] + S.columnHeaders
         let rows = samples.map { s -> [String] in
-            [iso.string(from: s.date), String(format: "%.3f", s.tickMs)] + s.value.columnValues
+            [iso.string(from: s.date), s.tickMs.formatted(csv3Double)] + s.value.columnValues
         }
         return MWDataTable(name: name, columns: columns, rows: rows)
     }

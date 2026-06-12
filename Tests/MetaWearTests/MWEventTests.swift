@@ -43,7 +43,10 @@ private func makeTimer(
 ) async throws -> MWTimer {
     let injector = Task {
         try? await Task.sleep(nanoseconds: 5_000_000)
-        await transport.inject(notification: Data([0x0C, 0x82, timerID]), to: MWUUIDs.notify)
+        // Real firmware replies with [0x0C, 0x02, timer_id] — plain notification,
+        // NOT a read response. Mirror that here so the SDK's notify-side
+        // awaiter resumes correctly.
+        await transport.inject(notification: Data([0x0C, 0x02, timerID]), to: MWUUIDs.notify)
     }
     defer { injector.cancel() }
     return try await device.createTimer(periodMs: 1000)
@@ -59,7 +62,10 @@ private func makeEvent(
 ) async throws -> MWEvent {
     let injector = Task {
         try? await Task.sleep(nanoseconds: 5_000_000)
-        await transport.inject(notification: Data([0x0A, 0x82, boardEventID]), to: MWUUIDs.notify)
+        // Real firmware replies with [0x0A, 0x02, event_id] — plain notification,
+        // NOT a read response. Mirror that here so the SDK's notify-side
+        // awaiter resumes correctly.
+        await transport.inject(notification: Data([0x0A, 0x02, boardEventID]), to: MWUUIDs.notify)
     }
     defer { injector.cancel() }
     return try await device.createEvent(source: source, action: action)
@@ -352,7 +358,8 @@ struct CreateEventDataTokenTests {
 
         let injector = Task {
             try? await Task.sleep(nanoseconds: 5_000_000)
-            await transport.inject(notification: Data([0x0A, 0x82, 0x00]), to: MWUUIDs.notify)
+            // Real firmware: plain notification (0x02), not read response (0x82).
+            await transport.inject(notification: Data([0x0A, 0x02, 0x00]), to: MWUUIDs.notify)
         }
         defer { injector.cancel() }
         _ = try await device.createEvent(
@@ -379,7 +386,8 @@ struct CreateEventDataTokenTests {
 
         let injector = Task {
             try? await Task.sleep(nanoseconds: 5_000_000)
-            await transport.inject(notification: Data([0x0A, 0x82, 0x00]), to: MWUUIDs.notify)
+            // Real firmware: plain notification (0x02), not read response (0x82).
+            await transport.inject(notification: Data([0x0A, 0x02, 0x00]), to: MWUUIDs.notify)
         }
         defer { injector.cancel() }
         _ = try await device.createEvent(

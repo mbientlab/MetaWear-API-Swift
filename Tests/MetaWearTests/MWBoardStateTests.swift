@@ -81,7 +81,7 @@ struct MWProtocolLayerModuleInfoTests {
         try await proto.start()
 
         // Inject a discovery reply for every known module.
-        Task {
+        let injector = Task {
             try? await Task.sleep(nanoseconds: 15_000_000)
             // Sparse — just the modules whose extra bytes we want to verify.
             // Everything else falls through to a minimal [module, 0x80, 0xFF, 0xFF].
@@ -95,6 +95,7 @@ struct MWProtocolLayerModuleInfoTests {
                 await transport.inject(notification: Data(response), to: MWUUIDs.notify)
             }
         }
+        defer { injector.cancel() }
 
         let modules = try await proto.discoverModules()
 
@@ -114,10 +115,10 @@ struct MWBoardStateCodableTests {
     private func makeSampleState() -> MWBoardState {
         let info = MWDeviceInformation(
             manufacturer: "MbientLab",
-            modelNumber: "12",
+            modelNumber: "8",                  // MetaMotion S
             serialNumber: "CAFEBABE",
             firmwareRevision: "1.5.0",
-            hardwareRevision: "0.4"
+            hardwareRevision: "r0.1"
         )
         let modules: [MWModuleInfo] = [
             MWModuleInfo(module: .switch_, implementation: 0, revision: 0),
@@ -224,10 +225,10 @@ struct MetaWearDeviceStateCaptureTests {
     private func makeInfo() -> MWDeviceInformation {
         MWDeviceInformation(
             manufacturer: "MbientLab",
-            modelNumber: "12",
+            modelNumber: "8",                  // MetaMotion S
             serialNumber: "A0B1",
             firmwareRevision: "1.5.0",
-            hardwareRevision: "0.4"
+            hardwareRevision: "r0.1"
         )
     }
 

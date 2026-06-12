@@ -5,10 +5,10 @@ import Foundation
 // MARK: - Shared helpers
 //
 // Mirrors MetaWear-SDK-Cpp/test/test_anonymous_signal.py.
-// Unlike the Python fixtures, Swift's queryActiveLoggers / queryActiveProcessors
-// expect the board to echo the query ID in byte[2] of the response. Swift test
-// vectors therefore prepend the ID byte to the Python byte strings; every other
-// byte matches the Python reference.
+// Wire format note: real MetaWear firmware does NOT echo the queried logger/
+// processor ID back in the response — the response is just `[module, 0x82,
+// payload...]`. The queried `id` is implicit (the loop variable in the SDK).
+// These fixtures match the Python byte-strings byte-for-byte.
 
 private func connectedDevice(
     injectLogTime tick: UInt32? = nil
@@ -96,18 +96,21 @@ private actor ScriptedResponder {
 
     private func respond(to cmd: Data) async {
         // [0x0B, 0x82, id] — logger query
+        // Real firmware response: [0x0B, 0x82, src_mod, src_reg, src_data_id, packed]
+        // (no logger-ID echo — `id` is implicit from the query)
         if cmd.count == 3, cmd[0] == 0x0B, cmd[1] == 0x82 {
             let id = cmd[2]
             if let payload = loggerResponses[id] {
-                await transport.inject(notification: Data([0x0B, 0x82, id] + payload), to: MWUUIDs.notify)
+                await transport.inject(notification: Data([0x0B, 0x82] + payload), to: MWUUIDs.notify)
             }
             return
         }
         // [0x09, 0x82, id] — processor query
+        // Real firmware response: [0x09, 0x82, parent_mod, parent_reg, parent_proc_id, packed, proc_type, config...]
         if cmd.count == 3, cmd[0] == 0x09, cmd[1] == 0x82 {
             let id = cmd[2]
             if let payload = procResponses[id] {
-                await transport.inject(notification: Data([0x09, 0x82, id] + payload), to: MWUUIDs.notify)
+                await transport.inject(notification: Data([0x09, 0x82] + payload), to: MWUUIDs.notify)
             }
             return
         }
@@ -135,26 +138,29 @@ struct QueryActiveProcessorsTests {
         let (device, transport) = try await connectedDevice()
 
         let responder = Task {
-            // Python TestActivity responses. Swift prepends the ID-echo byte.
+            // Python TestActivity responses. Wire format is `[0x09, 0x82,
+            // parent_mod, parent_reg, parent_proc_id, packed, proc_type, config...]`
+            // — no logger/processor-id echo; the SDK derives the id from its
+            // own query loop variable.
             // proc 0: accel XYZ → RMS. parent_mod=0x03, parent_reg=0x04,
             //         parent_proc_id=0xFF, packed=0xA0 (offset=0, length=6), type=0x07 (RMS)
-            let p0: [UInt8] = [0x09, 0x82, 0x00,
+            let p0: [UInt8] = [0x09, 0x82,
                                0x03, 0x04, 0xFF, 0xA0, 0x07,
                                0xA5, 0x00, 0x00, 0x00, 0x00, 0xD0,
                                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
             // proc 1: RMS(proc0) → accumulate. parent=dataproc(0x09)/notify(0x03),
             //         parent_proc_id=0x00, packed=0x20 (offset=0, length=2), type=0x02
-            let p1: [UInt8] = [0x09, 0x82, 0x01,
+            let p1: [UInt8] = [0x09, 0x82,
                                0x09, 0x03, 0x00, 0x20, 0x02,
                                0x07, 0x00, 0x00, 0x00, 0x00, 0xD0,
                                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
             // proc 2: accumulate(proc1) → time. parent_proc_id=0x01, packed=0x60 (offset=0,len=4), type=0x08
-            let p2: [UInt8] = [0x09, 0x82, 0x02,
+            let p2: [UInt8] = [0x09, 0x82,
                                0x09, 0x03, 0x01, 0x60, 0x08,
                                0x13, 0x30, 0x75, 0x00, 0x00, 0xD0,
                                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
             // proc 3: accumulate(proc1) → buffer (type=0x0F).
-            let p3: [UInt8] = [0x09, 0x82, 0x03,
+            let p3: [UInt8] = [0x09, 0x82,
                                0x09, 0x03, 0x01, 0x60, 0x0F,
                                0x03, 0x00, 0x00, 0x00, 0x00, 0xD0,
                                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
@@ -391,8 +397,10 @@ struct SchemeCompositionTests {
 // MARK: - Tranche D: Python test-suite port
 //
 // Port of test_anonymous_signal.py. Each `@Suite` below mirrors one Python class.
-// Byte vectors for processor query responses match Python verbatim except for
-// the Swift convention of echoing the query ID in byte[2] of the response.
+// Byte vectors for processor query responses match the Python reference
+// verbatim — the firmware does not echo the query ID, so the response lines up
+// directly with the documented `[parent_mod, parent_reg, parent_proc_id,
+// packed, proc_type, config...]` layout.
 
 private func anonSetup(
     accelRange: UInt8 = 0x08,

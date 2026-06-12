@@ -103,7 +103,15 @@ struct ProtocolLayerRoutingTests {
         async let first: Data  = proto.read(.accelerometer, 0x00)
         async let second: Data = proto.read(.accelerometer, 0x00)
 
-        try await Task.sleep(nanoseconds: 5_000_000)
+        // `sendAndAwait` enqueues each waiter *before* writing the read command
+        // to the transport — so once we observe both writes on the transport,
+        // both continuations are guaranteed parked. A fixed sleep races against
+        // task scheduling under parallel-test load and was the source of an
+        // intermittent timeout here.
+        for _ in 0..<200 {
+            if await transport.writtenData.count >= 2 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)   // 1 ms × 200 = 200 ms cap
+        }
 
         let reply1 = Data([0x03, 0x80, 0x01])
         let reply2 = Data([0x03, 0x80, 0x02])
@@ -147,21 +155,23 @@ struct ProtocolLayerDiscoveryTests {
         await proto.start()
 
         // Discovery fires a read [module, 0x80] for each MWModule.
-        // We need to inject matching responses.
-        // Spawn a task that watches written data and injects replies.
+        // Continuously poll for those reads and inject a reply the first time
+        // we see each one — a one-shot sleep races against parallel-test load.
         let replyTask = Task {
-            // Poll briefly to let all discovery reads be written
-            try await Task.sleep(nanoseconds: 20_000_000)   // 20ms
-
-            let written = await transport.writtenData
-            for (cmd, _, _) in written {
-                guard cmd.count >= 2 else { continue }
-                let moduleId  = cmd[0]
-                let regByte   = cmd[1]
-                guard (regByte & 0x80) != 0 else { continue }   // only reads
-                // Reply: [module, 0x80, impl=0x01, rev=0x00]
-                let reply = Data([moduleId, 0x80, 0x01, 0x00])
-                await transport.inject(notification: reply, to: MWUUIDs.notify)
+            var responded = Set<Data>()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000)
+                let written = await transport.writtenData
+                for (cmd, _, _) in written {
+                    guard cmd.count >= 2 else { continue }
+                    let regByte = cmd[1]
+                    guard (regByte & 0x80) != 0 else { continue }   // only reads
+                    guard !responded.contains(cmd) else { continue }
+                    responded.insert(cmd)
+                    // Reply: [module, 0x80, impl=0x01, rev=0x00]
+                    let reply = Data([cmd[0], 0x80, 0x01, 0x00])
+                    await transport.inject(notification: reply, to: MWUUIDs.notify)
+                }
             }
         }
 
@@ -184,14 +194,19 @@ struct ProtocolLayerDiscoveryTests {
 
         // Discover only accelerometer — all others are given impl=0xFF (absent)
         let replyTask = Task {
-            try await Task.sleep(nanoseconds: 20_000_000)
-            let written = await transport.writtenData
-            for (cmd, _, _) in written {
-                guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
-                let moduleId = cmd[0]
-                let impl: UInt8 = moduleId == 0x03 ? 0x01 : 0xFF
-                let reply = Data([moduleId, 0x80, impl, 0x00])
-                await transport.inject(notification: reply, to: MWUUIDs.notify)
+            var responded = Set<Data>()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000)
+                let written = await transport.writtenData
+                for (cmd, _, _) in written {
+                    guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
+                    guard !responded.contains(cmd) else { continue }
+                    responded.insert(cmd)
+                    let moduleId = cmd[0]
+                    let impl: UInt8 = moduleId == 0x03 ? 0x01 : 0xFF
+                    let reply = Data([moduleId, 0x80, impl, 0x00])
+                    await transport.inject(notification: reply, to: MWUUIDs.notify)
+                }
             }
         }
 

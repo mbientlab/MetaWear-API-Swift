@@ -43,29 +43,46 @@ public struct MWEventSource: Sendable {
     }
 }
 
+// MARK: - Source-module register opcodes referenced by event constructors
+//
+// Each event source identifies "module + register" of the signal that fires
+// the event. The opcodes below name those signal registers so the convenience
+// constructors don't read like a string of magic numbers.
+
+private enum SourceRegister {
+    /// TIMER module — TIMER_NOTIFY: fires once per timer tick. Register 0x06.
+    static let timerNotify: UInt8       = 0x06
+    /// SWITCH module — SWITCH_STATE: fires on every button state change. Register 0x01.
+    static let switchState: UInt8       = 0x01
+    /// GPIO module — PIN_CHANGE_NOTIFY: fires on pin-change interrupt. Register 0x0A.
+    static let gpioPinChange: UInt8     = 0x0A
+    /// SETTINGS module — DISCONNECT_EVENT: fires when the host drops connection. Register 0x0A.
+    static let settingsDisconnect: UInt8 = 0x0A
+}
+
 // MARK: - Convenience source constructors
 
 public extension MWEventSource {
     /// Fires each time the given timer ticks (`[0x0C, 0x06, timer_id]`).
     static func timerFired(_ timer: MWTimer) -> MWEventSource {
-        MWEventSource(module: .timer, register: 0x06, dataID: timer.id)
+        MWEventSource(module: .timer, register: SourceRegister.timerNotify, dataID: timer.id)
     }
 
     /// Fires on every button state change (`[0x01, 0x01, ...]`).
     static func buttonChanged() -> MWEventSource {
-        MWEventSource(module: .switch_, register: 0x01, dataID: 0xFF)
+        MWEventSource(module: .switch_, register: SourceRegister.switchState, dataID: 0xFF)
     }
 
     /// Fires on a GPIO pin-change notification for the given pin.
     static func gpioChanged(pin: UInt8) -> MWEventSource {
-        MWEventSource(module: .gpio, register: 0x0A, dataID: pin)
+        MWEventSource(module: .gpio, register: SourceRegister.gpioPinChange, dataID: pin)
     }
 
     /// Fires when the board is disconnected by the host (`[0x11, 0x0A, ...]`).
     /// Bind this to a command to have the board run that command on disconnect
     /// — e.g. stop advertising, save state. Requires settings revision ≥ 2.
     static func disconnected() -> MWEventSource {
-        MWEventSource(module: .settings, register: 0x0A, dataID: 0xFF)
+        MWEventSource(module: .settings, register: SourceRegister.settingsDisconnect, dataID: 0xFF)
     }
 }
 
@@ -179,8 +196,13 @@ public extension MetaWearDevice {
         }
         let entryCmd = Data(entryBytes)
 
-        // Board responds with [0x0A, 0x82, event_id] after processing ENTRY
-        let response = try await sendRead(command: entryCmd, awaitModule: .event, awaitRegister: 0x02)
+        // Board responds with [0x0A, 0x02, event_id] after processing ENTRY.
+        // The reply is a plain notification (high bit clear), NOT a read
+        // response — same shape as logger subscribe / processor add.
+        // `sendRead` would await on the read-response form (0x82) and time out.
+        let response = try await sendAndAwaitNotification(
+            command: entryCmd, awaitModule: .event, awaitRegister: 0x02
+        )
         guard response.count >= 3 else {
             throw MWError.operationFailed("Event create response too short: \(response.count) bytes")
         }

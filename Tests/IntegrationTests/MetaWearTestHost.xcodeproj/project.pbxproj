@@ -11,6 +11,25 @@
 		AB7B00752F95A7E20056F9AF /* AccelerometerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00732F95A7E20056F9AF /* AccelerometerTests.swift */; };
 		AB7B00772F95D0E00056F9AF /* AccelerometerBMI160Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00762F95D0E00056F9AF /* AccelerometerBMI160Tests.swift */; };
 		AB7B00792F95D3CC0056F9AF /* LEDTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00782F95D3CC0056F9AF /* LEDTests.swift */; };
+		AB7B00822F99A9F70056F9AF /* MacroTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B007E2F99A9F70056F9AF /* MacroTests.swift */; };
+		AB7B00842F99A9F70056F9AF /* HapticTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B007C2F99A9F70056F9AF /* HapticTests.swift */; };
+		AB7B00852F99A9F70056F9AF /* SensorFusionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B007F2F99A9F70056F9AF /* SensorFusionTests.swift */; };
+		AB7B00862F99A9F70056F9AF /* LoggingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B007D2F99A9F70056F9AF /* LoggingTests.swift */; };
+		AB7B00882F99A9F70056F9AF /* SerialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00812F99A9F70056F9AF /* SerialTests.swift */; };
+		AB7B00892F99A9F70056F9AF /* EnvironmentSensorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B007A2F99A9F70056F9AF /* EnvironmentSensorTests.swift */; };
+		AB7B008C2F99B6FE0056F9AF /* GPIOTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B008A2F99B6FE0056F9AF /* GPIOTests.swift */; };
+		AB7B008D2F99B6FE0056F9AF /* SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B008B2F99B6FE0056F9AF /* SettingsTests.swift */; };
+		AB7B008F2F9BE2800056F9AF /* iBeaconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B008E2F9BE2800056F9AF /* iBeaconTests.swift */; };
+		AB7B00932F9BEB780056F9AF /* SwitchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00922F9BEB780056F9AF /* SwitchTests.swift */; };
+		AB7B00942F9BEB780056F9AF /* GyroscopeBMI160Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00902F9BEB780056F9AF /* GyroscopeBMI160Tests.swift */; };
+		AB7B00952F9BEB780056F9AF /* GyroscopeBMI270Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00912F9BEB780056F9AF /* GyroscopeBMI270Tests.swift */; };
+		AB7B00972F9BED5A0056F9AF /* MagnetometerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00962F9BED5A0056F9AF /* MagnetometerTests.swift */; };
+		AB7B00992F9C77770056F9AF /* FactoryResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B00982F9C77770056F9AF /* FactoryResetTests.swift */; };
+		AB7B009F2F9EB3BA0056F9AF /* StreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B009E2F9EB3BA0056F9AF /* StreamTests.swift */; };
+		AB7B00A02F9EB3BA0056F9AF /* CommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B009A2F9EB3BA0056F9AF /* CommandTests.swift */; };
+		AB7B00A12F9EB3BA0056F9AF /* ReadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B009D2F9EB3BA0056F9AF /* ReadTests.swift */; };
+		AB7B00A22F9EB3BA0056F9AF /* EventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B009C2F9EB3BA0056F9AF /* EventTests.swift */; };
+		AB7B00A32F9EB3BA0056F9AF /* DeviceConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B009B2F9EB3BA0056F9AF /* DeviceConnectionTests.swift */; };
 		DEAD0000000000000000D000 /* TestHostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEAD0000000000000000C000 /* TestHostApp.swift */; };
 		DEAD0000000000000000D001 /* HardwareSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEAD0000000000000000C001 /* HardwareSupport.swift */; };
 		DEAD0000000000000000D002 /* BluetoothSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEAD0000000000000000C002 /* BluetoothSmokeTests.swift */; };
@@ -35,6 +54,25 @@
 		AB7B00732F95A7E20056F9AF /* AccelerometerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AccelerometerTests.swift; path = ../MetaWearHardwareTests/AccelerometerTests.swift; sourceTree = SOURCE_ROOT; };
 		AB7B00762F95D0E00056F9AF /* AccelerometerBMI160Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AccelerometerBMI160Tests.swift; path = ../MetaWearHardwareTests/AccelerometerBMI160Tests.swift; sourceTree = SOURCE_ROOT; };
 		AB7B00782F95D3CC0056F9AF /* LEDTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LEDTests.swift; path = ../MetaWearHardwareTests/LEDTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B007A2F99A9F70056F9AF /* EnvironmentSensorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EnvironmentSensorTests.swift; path = ../MetaWearHardwareTests/EnvironmentSensorTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B007C2F99A9F70056F9AF /* HapticTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HapticTests.swift; path = ../MetaWearHardwareTests/HapticTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B007D2F99A9F70056F9AF /* LoggingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LoggingTests.swift; path = ../MetaWearHardwareTests/LoggingTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B007E2F99A9F70056F9AF /* MacroTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MacroTests.swift; path = ../MetaWearHardwareTests/MacroTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B007F2F99A9F70056F9AF /* SensorFusionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SensorFusionTests.swift; path = ../MetaWearHardwareTests/SensorFusionTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B00812F99A9F70056F9AF /* SerialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SerialTests.swift; path = ../MetaWearHardwareTests/SerialTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B008A2F99B6FE0056F9AF /* GPIOTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GPIOTests.swift; path = ../MetaWearHardwareTests/GPIOTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B008B2F99B6FE0056F9AF /* SettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsTests.swift; path = ../MetaWearHardwareTests/SettingsTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B008E2F9BE2800056F9AF /* iBeaconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = iBeaconTests.swift; path = ../MetaWearHardwareTests/iBeaconTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B00902F9BEB780056F9AF /* GyroscopeBMI160Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GyroscopeBMI160Tests.swift; path = ../MetaWearHardwareTests/GyroscopeBMI160Tests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B00912F9BEB780056F9AF /* GyroscopeBMI270Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = GyroscopeBMI270Tests.swift; path = ../MetaWearHardwareTests/GyroscopeBMI270Tests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B00922F9BEB780056F9AF /* SwitchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SwitchTests.swift; path = ../MetaWearHardwareTests/SwitchTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B00962F9BED5A0056F9AF /* MagnetometerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MagnetometerTests.swift; path = ../MetaWearHardwareTests/MagnetometerTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B00982F9C77770056F9AF /* FactoryResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FactoryResetTests.swift; path = ../MetaWearHardwareTests/FactoryResetTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B009A2F9EB3BA0056F9AF /* CommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CommandTests.swift; path = ../MetaWearHardwareTests/CommandTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B009B2F9EB3BA0056F9AF /* DeviceConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DeviceConnectionTests.swift; path = ../MetaWearHardwareTests/DeviceConnectionTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B009C2F9EB3BA0056F9AF /* EventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EventTests.swift; path = ../MetaWearHardwareTests/EventTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B009D2F9EB3BA0056F9AF /* ReadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReadTests.swift; path = ../MetaWearHardwareTests/ReadTests.swift; sourceTree = SOURCE_ROOT; };
+		AB7B009E2F9EB3BA0056F9AF /* StreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StreamTests.swift; path = ../MetaWearHardwareTests/StreamTests.swift; sourceTree = SOURCE_ROOT; };
 		DEAD0000000000000000C000 /* TestHostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestHostApp.swift; sourceTree = "<group>"; };
 		DEAD0000000000000000C001 /* HardwareSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HardwareSupport.swift; path = ../MetaWearHardwareTests/HardwareSupport.swift; sourceTree = "<group>"; };
 		DEAD0000000000000000C002 /* BluetoothSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BluetoothSmokeTests.swift; path = ../MetaWearHardwareTests/BluetoothSmokeTests.swift; sourceTree = "<group>"; };
@@ -95,6 +133,25 @@
 		DEAD000000000000000000B0 /* MacTests */ = {
 			isa = PBXGroup;
 			children = (
+				AB7B009A2F9EB3BA0056F9AF /* CommandTests.swift */,
+				AB7B009B2F9EB3BA0056F9AF /* DeviceConnectionTests.swift */,
+				AB7B009C2F9EB3BA0056F9AF /* EventTests.swift */,
+				AB7B009D2F9EB3BA0056F9AF /* ReadTests.swift */,
+				AB7B009E2F9EB3BA0056F9AF /* StreamTests.swift */,
+				AB7B00982F9C77770056F9AF /* FactoryResetTests.swift */,
+				AB7B00962F9BED5A0056F9AF /* MagnetometerTests.swift */,
+				AB7B00902F9BEB780056F9AF /* GyroscopeBMI160Tests.swift */,
+				AB7B00912F9BEB780056F9AF /* GyroscopeBMI270Tests.swift */,
+				AB7B00922F9BEB780056F9AF /* SwitchTests.swift */,
+				AB7B008E2F9BE2800056F9AF /* iBeaconTests.swift */,
+				AB7B008A2F99B6FE0056F9AF /* GPIOTests.swift */,
+				AB7B008B2F99B6FE0056F9AF /* SettingsTests.swift */,
+				AB7B007A2F99A9F70056F9AF /* EnvironmentSensorTests.swift */,
+				AB7B007C2F99A9F70056F9AF /* HapticTests.swift */,
+				AB7B007D2F99A9F70056F9AF /* LoggingTests.swift */,
+				AB7B007E2F99A9F70056F9AF /* MacroTests.swift */,
+				AB7B007F2F99A9F70056F9AF /* SensorFusionTests.swift */,
+				AB7B00812F99A9F70056F9AF /* SerialTests.swift */,
 				AB7B00782F95D3CC0056F9AF /* LEDTests.swift */,
 				AB7B00762F95D0E00056F9AF /* AccelerometerBMI160Tests.swift */,
 				AB7B00722F95A7E20056F9AF /* AccelerometerBMI270Tests.swift */,
@@ -213,10 +270,29 @@
 			buildActionMask = 2147483647;
 			files = (
 				DEAD0000000000000000D001 /* HardwareSupport.swift in Sources */,
+				AB7B00972F9BED5A0056F9AF /* MagnetometerTests.swift in Sources */,
 				DEAD0000000000000000D002 /* BluetoothSmokeTests.swift in Sources */,
+				AB7B008F2F9BE2800056F9AF /* iBeaconTests.swift in Sources */,
+				AB7B00822F99A9F70056F9AF /* MacroTests.swift in Sources */,
+				AB7B00842F99A9F70056F9AF /* HapticTests.swift in Sources */,
+				AB7B00852F99A9F70056F9AF /* SensorFusionTests.swift in Sources */,
+				AB7B00992F9C77770056F9AF /* FactoryResetTests.swift in Sources */,
+				AB7B00862F99A9F70056F9AF /* LoggingTests.swift in Sources */,
+				AB7B00932F9BEB780056F9AF /* SwitchTests.swift in Sources */,
+				AB7B009F2F9EB3BA0056F9AF /* StreamTests.swift in Sources */,
+				AB7B00A02F9EB3BA0056F9AF /* CommandTests.swift in Sources */,
+				AB7B00A12F9EB3BA0056F9AF /* ReadTests.swift in Sources */,
+				AB7B00A22F9EB3BA0056F9AF /* EventTests.swift in Sources */,
+				AB7B00A32F9EB3BA0056F9AF /* DeviceConnectionTests.swift in Sources */,
+				AB7B00942F9BEB780056F9AF /* GyroscopeBMI160Tests.swift in Sources */,
+				AB7B00952F9BEB780056F9AF /* GyroscopeBMI270Tests.swift in Sources */,
+				AB7B00882F99A9F70056F9AF /* SerialTests.swift in Sources */,
+				AB7B00892F99A9F70056F9AF /* EnvironmentSensorTests.swift in Sources */,
 				AB7B00772F95D0E00056F9AF /* AccelerometerBMI160Tests.swift in Sources */,
 				DEAD0000000000000000D003 /* ConnectivityTests.swift in Sources */,
 				AB7B00742F95A7E20056F9AF /* AccelerometerBMI270Tests.swift in Sources */,
+				AB7B008C2F99B6FE0056F9AF /* GPIOTests.swift in Sources */,
+				AB7B008D2F99B6FE0056F9AF /* SettingsTests.swift in Sources */,
 				AB7B00792F95D3CC0056F9AF /* LEDTests.swift in Sources */,
 				AB7B00752F95A7E20056F9AF /* AccelerometerTests.swift in Sources */,
 			);

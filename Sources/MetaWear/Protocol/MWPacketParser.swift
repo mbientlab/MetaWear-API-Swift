@@ -224,18 +224,21 @@ enum MWPacketParser {
 
     // MARK: - MAC address (settings rev ≥ 2)
     //
-    // Response shape per C++ `settings.cpp` MAC_ADDRESS interpreter:
-    //   [module=0x11, register=0x8B, data_id, mac5, mac4, mac3, mac2, mac1, mac0]
-    // 6 MAC bytes live at offsets 3..8 in little-endian order; the canonical
-    // "AA:BB:CC:DD:EE:FF" form reverses them.
+    // The payload is 6 bytes (older firmware) or 7 bytes with a leading
+    // address-type byte (current firmware — `0x01` = random static). Mirrors
+    // C++ `convert_to_mac_address`, which does `offset = len == 7 ? 1 : 0`.
+    // The 6 MAC bytes are little-endian; the canonical "AA:BB:CC:DD:EE:FF"
+    // form reverses them.
     //
-    // Python reference (`test_settings.py::test_mac_address`):
+    // Python reference (`test_settings.py::test_mac_address`, 7-byte form):
     //   b'\x11\x8b\x01\x07\x7b\x52\x8f\xc9\xe8' → "E8:C9:8F:52:7B:07"
     static func parseMacAddress(_ packet: Data) throws -> String {
-        guard packet.count >= 9 else {
+        guard packet.count >= 8 else {
             throw MWError.operationFailed("Packet too short for MAC address: \(packet.count) bytes")
         }
-        let start = packet.startIndex + 3
+        // Skip the address-type byte when present (payload of 7+ bytes).
+        let macOffset = packet.count >= 9 ? 3 : 2
+        let start = packet.startIndex + macOffset
         let macBytes = (0..<6).map { packet[start + $0] }.reversed()
         return macBytes.map { String(format: "%02X", $0) }.joined(separator: ":")
     }
@@ -259,21 +262,37 @@ enum MWPacketParser {
     }
 
     // MARK: - Log entry (raw download)
-    // Raw 8-byte entry: [id_reset_uid, tick_lo, tick_mid, tick_hi, data_0, data_1, data_2, data_3]
-    // Tick is 24-bit (3 bytes); rawData is 32-bit (4 bytes). Total = 1 + 3 + 4 = 8 bytes.
+    // Raw 9-byte entry: [id_reset_uid, tick(4 LE), data(4 LE)].
+    // Total = 1 + 4 + 4 = 9 bytes per entry. The firmware bundles 1 or 2
+    // entries in a single BLE notification (preceded by a 2-byte
+    // [module, register] header), so a paired notification is 20 bytes
+    // and a single-entry notification is 11 bytes.
+    //
+    // History: an earlier draft assumed a 24-bit tick (3 bytes) for an
+    // 8-byte entry, but observed BLE notifications carrying paired
+    // entries are 20 bytes (2 + 9 + 9), and the inter-sample tick deltas
+    // at 1 Hz only resolve to ~1000 ms when the tick is read as 32-bit
+    // LE from bytes 1..4. See `metawear/core/cpp/logging.cpp` —
+    // `LOG_ENTRY_SIZE = 9` — and the byte-level protocol reference
+    // (`docs/protocol-reference.md`).
 
     static let msPerTick: Double = (48.0 / 32768.0) * 1000.0  // ≈ 1.4648 ms/tick
 
     static func parseLogEntry(_ packet: Data) throws -> (id: UInt8, resetUID: UInt8, tick: UInt32, rawData: UInt32) {
-        guard packet.count >= 8 else {
+        guard packet.count >= 9 else {
             throw MWError.operationFailed("Log entry too short: \(packet.count) bytes")
         }
-        let idByte   = packet[0]
+        // Guarantee zero-based indexing — `parseAll` slices via
+        // `notification.advanced(by:)` which on some Foundation builds
+        // preserves the original buffer indices, and `parseUInt32LE`
+        // below assumes zero-based.
+        let p = Data(packet)
+        let idByte   = p[0]
         let id       = idByte & 0x1F
         let resetUID = (idByte >> 5) & 0x07
-        // Tick is 24-bit little-endian stored in bytes 1–3
-        let tick     = UInt32(packet[1]) | (UInt32(packet[2]) << 8) | (UInt32(packet[3]) << 16)
-        let rawData  = parseUInt32LE(packet, offset: 4)
+        // Tick is 32-bit little-endian stored in bytes 1..4
+        let tick     = parseUInt32LE(p, offset: 1)
+        let rawData  = parseUInt32LE(p, offset: 5)
         return (id, resetUID, tick, rawData)
     }
 }

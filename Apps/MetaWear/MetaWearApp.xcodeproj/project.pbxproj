@@ -1,0 +1,630 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AB0012F72FBD6E1C00EC9F46 /* MetaWear in Frameworks */ = {isa = PBXBuildFile; productRef = AB0012F62FBD6E1C00EC9F46 /* MetaWear */; };
+		AB0012F92FBD6E1C00EC9F46 /* MetaWearFirmware in Frameworks */ = {isa = PBXBuildFile; productRef = AB0012F82FBD6E1C00EC9F46 /* MetaWearFirmware */; };
+		AB0012FB2FBD6E1C00EC9F46 /* MetaWearPersistence in Frameworks */ = {isa = PBXBuildFile; productRef = AB0012FA2FBD6E1C00EC9F46 /* MetaWearPersistence */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		ABF59C9F2FBD6A3C002FA836 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = ABF59C892FBD6A3B002FA836 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = ABF59C902FBD6A3B002FA836;
+			remoteInfo = MetaWear;
+		};
+		ABF59CA92FBD6A3C002FA836 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = ABF59C892FBD6A3B002FA836 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = ABF59C902FBD6A3B002FA836;
+			remoteInfo = MetaWear;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		ABF59C912FBD6A3B002FA836 /* MetaWearApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MetaWearApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		ABF59C9E2FBD6A3C002FA836 /* MetaWearAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MetaWearAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		ABF59CA82FBD6A3C002FA836 /* MetaWearAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MetaWearAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		ABF59C932FBD6A3B002FA836 /* MetaWear */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MetaWear;
+			sourceTree = "<group>";
+		};
+		ABF59CA12FBD6A3C002FA836 /* MetaWearTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MetaWearTests;
+			sourceTree = "<group>";
+		};
+		ABF59CAB2FBD6A3C002FA836 /* MetaWearUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MetaWearUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		ABF59C8E2FBD6A3B002FA836 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB0012F72FBD6E1C00EC9F46 /* MetaWear in Frameworks */,
+				AB0012FB2FBD6E1C00EC9F46 /* MetaWearPersistence in Frameworks */,
+				AB0012F92FBD6E1C00EC9F46 /* MetaWearFirmware in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ABF59C9B2FBD6A3C002FA836 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ABF59CA52FBD6A3C002FA836 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		ABF59C882FBD6A3B002FA836 = {
+			isa = PBXGroup;
+			children = (
+				ABF59C932FBD6A3B002FA836 /* MetaWear */,
+				ABF59CA12FBD6A3C002FA836 /* MetaWearTests */,
+				ABF59CAB2FBD6A3C002FA836 /* MetaWearUITests */,
+				ABF59C922FBD6A3B002FA836 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		ABF59C922FBD6A3B002FA836 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				ABF59C912FBD6A3B002FA836 /* MetaWearApp.app */,
+				ABF59C9E2FBD6A3C002FA836 /* MetaWearAppTests.xctest */,
+				ABF59CA82FBD6A3C002FA836 /* MetaWearAppUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		ABF59C902FBD6A3B002FA836 /* MetaWearApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = ABF59CB22FBD6A3C002FA836 /* Build configuration list for PBXNativeTarget "MetaWearApp" */;
+			buildPhases = (
+				ABF59C8D2FBD6A3B002FA836 /* Sources */,
+				ABF59C8E2FBD6A3B002FA836 /* Frameworks */,
+				ABF59C8F2FBD6A3B002FA836 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				ABF59C932FBD6A3B002FA836 /* MetaWear */,
+			);
+			name = MetaWearApp;
+			packageProductDependencies = (
+				AB0012F62FBD6E1C00EC9F46 /* MetaWear */,
+				AB0012F82FBD6E1C00EC9F46 /* MetaWearFirmware */,
+				AB0012FA2FBD6E1C00EC9F46 /* MetaWearPersistence */,
+			);
+			productName = MetaWear;
+			productReference = ABF59C912FBD6A3B002FA836 /* MetaWearApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		ABF59C9D2FBD6A3C002FA836 /* MetaWearAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = ABF59CB52FBD6A3C002FA836 /* Build configuration list for PBXNativeTarget "MetaWearAppTests" */;
+			buildPhases = (
+				ABF59C9A2FBD6A3C002FA836 /* Sources */,
+				ABF59C9B2FBD6A3C002FA836 /* Frameworks */,
+				ABF59C9C2FBD6A3C002FA836 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				ABF59CA02FBD6A3C002FA836 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				ABF59CA12FBD6A3C002FA836 /* MetaWearTests */,
+			);
+			name = MetaWearAppTests;
+			packageProductDependencies = (
+			);
+			productName = MetaWearTests;
+			productReference = ABF59C9E2FBD6A3C002FA836 /* MetaWearAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		ABF59CA72FBD6A3C002FA836 /* MetaWearAppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = ABF59CB82FBD6A3C002FA836 /* Build configuration list for PBXNativeTarget "MetaWearAppUITests" */;
+			buildPhases = (
+				ABF59CA42FBD6A3C002FA836 /* Sources */,
+				ABF59CA52FBD6A3C002FA836 /* Frameworks */,
+				ABF59CA62FBD6A3C002FA836 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				ABF59CAA2FBD6A3C002FA836 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				ABF59CAB2FBD6A3C002FA836 /* MetaWearUITests */,
+			);
+			name = MetaWearAppUITests;
+			packageProductDependencies = (
+			);
+			productName = MetaWearUITests;
+			productReference = ABF59CA82FBD6A3C002FA836 /* MetaWearAppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		ABF59C892FBD6A3B002FA836 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					ABF59C902FBD6A3B002FA836 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					ABF59C9D2FBD6A3C002FA836 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = ABF59C902FBD6A3B002FA836;
+					};
+					ABF59CA72FBD6A3C002FA836 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = ABF59C902FBD6A3B002FA836;
+					};
+				};
+			};
+			buildConfigurationList = ABF59C8C2FBD6A3B002FA836 /* Build configuration list for PBXProject "MetaWearApp" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = ABF59C882FBD6A3B002FA836;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AB0012F52FBD6E1C00EC9F46 /* XCLocalSwiftPackageReference "../../../MetaWear-API-Swift" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = ABF59C922FBD6A3B002FA836 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				ABF59C902FBD6A3B002FA836 /* MetaWearApp */,
+				ABF59C9D2FBD6A3C002FA836 /* MetaWearAppTests */,
+				ABF59CA72FBD6A3C002FA836 /* MetaWearAppUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		ABF59C8F2FBD6A3B002FA836 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ABF59C9C2FBD6A3C002FA836 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ABF59CA62FBD6A3C002FA836 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		ABF59C8D2FBD6A3B002FA836 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ABF59C9A2FBD6A3C002FA836 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ABF59CA42FBD6A3C002FA836 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		ABF59CA02FBD6A3C002FA836 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = ABF59C902FBD6A3B002FA836 /* MetaWearApp */;
+			targetProxy = ABF59C9F2FBD6A3C002FA836 /* PBXContainerItemProxy */;
+		};
+		ABF59CAA2FBD6A3C002FA836 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = ABF59C902FBD6A3B002FA836 /* MetaWearApp */;
+			targetProxy = ABF59CA92FBD6A3C002FA836 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		ABF59CB02FBD6A3C002FA836 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		ABF59CB12FBD6A3C002FA836 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		ABF59CB32FBD6A3C002FA836 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MetaWear.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 10.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWear;
+				PRODUCT_MODULE_NAME = MetaWearApp;
+				PRODUCT_NAME = MetaWearApp;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		ABF59CB42FBD6A3C002FA836 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MetaWear.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 10.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWear;
+				PRODUCT_MODULE_NAME = MetaWearApp;
+				PRODUCT_NAME = MetaWearApp;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		ABF59CB62FBD6A3C002FA836 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MetaWearApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MetaWearApp";
+			};
+			name = Debug;
+		};
+		ABF59CB72FBD6A3C002FA836 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MetaWearApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MetaWearApp";
+			};
+			name = Release;
+		};
+		ABF59CB92FBD6A3C002FA836 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = MetaWear;
+			};
+			name = Debug;
+		};
+		ABF59CBA2FBD6A3C002FA836 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S2273LZ6GL;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = MetaWear;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		ABF59C8C2FBD6A3B002FA836 /* Build configuration list for PBXProject "MetaWearApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ABF59CB02FBD6A3C002FA836 /* Debug */,
+				ABF59CB12FBD6A3C002FA836 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		ABF59CB22FBD6A3C002FA836 /* Build configuration list for PBXNativeTarget "MetaWearApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ABF59CB32FBD6A3C002FA836 /* Debug */,
+				ABF59CB42FBD6A3C002FA836 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		ABF59CB52FBD6A3C002FA836 /* Build configuration list for PBXNativeTarget "MetaWearAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ABF59CB62FBD6A3C002FA836 /* Debug */,
+				ABF59CB72FBD6A3C002FA836 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		ABF59CB82FBD6A3C002FA836 /* Build configuration list for PBXNativeTarget "MetaWearAppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ABF59CB92FBD6A3C002FA836 /* Debug */,
+				ABF59CBA2FBD6A3C002FA836 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AB0012F52FBD6E1C00EC9F46 /* XCLocalSwiftPackageReference "../../../MetaWear-API-Swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../../MetaWear-API-Swift";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AB0012F62FBD6E1C00EC9F46 /* MetaWear */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MetaWear;
+		};
+		AB0012F82FBD6E1C00EC9F46 /* MetaWearFirmware */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MetaWearFirmware;
+		};
+		AB0012FA2FBD6E1C00EC9F46 /* MetaWearPersistence */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MetaWearPersistence;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = ABF59C892FBD6A3B002FA836 /* Project object */;
+}

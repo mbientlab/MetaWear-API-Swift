@@ -61,8 +61,14 @@ public extension MetaWearDevice {
             UInt8(repetitions & 0xFF), UInt8(repetitions >> 8),
             immediate ? 0x01 : 0x00
         ])
-        // Response: [0x0C, 0x82, timer_id]  (0x02 | read-bit 0x80)
-        let response = try await sendRead(command: cmd, awaitModule: .timer, awaitRegister: 0x02)
+        // Response: [0x0C, 0x02, timer_id] — plain notification, NOT a read
+        // response. Same firmware pattern as logger subscribe / processor add /
+        // event create: every "create resource on register 0x02" reply lands
+        // without the 0x80 read bit, so we await on `notifyWaiters`, not
+        // `readWaiters`. `sendRead` would time out here.
+        let response = try await sendAndAwaitNotification(
+            command: cmd, awaitModule: .timer, awaitRegister: 0x02
+        )
         guard response.count >= 3 else {
             throw MWError.operationFailed("Timer create response too short: \(response.count) bytes")
         }
@@ -85,6 +91,17 @@ public extension MetaWearDevice {
     /// Remove the timer from the board, freeing its ID. Cannot be restarted after this.
     func removeTimer(_ timer: MWTimer) async throws {
         try await send(MWTimerCommand.remove(timer))
+    }
+
+    /// Send a remove command for every timer slot the firmware exposes
+    /// (8 IDs, per the C++ SDK pool). Unknown IDs are silently ignored by
+    /// the board, so this is a safe broad-stroke cleanup after a crash or
+    /// at the start of a fresh session.
+    func removeAllTimers() async throws {
+        for id in 0..<UInt8(8) {
+            let stub = MWTimer(id: id, periodMs: 0, repetitions: MWTimer.infinite, immediate: false)
+            try? await removeTimer(stub)
+        }
     }
 
     // MARK: Notification stream

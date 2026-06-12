@@ -76,7 +76,7 @@ enum MetaWearDemo {
         print("\nStreaming accelerometer at 100 Hz for 5 seconds…")
         print("  (printing every 20th sample)")
 
-        let stream = try await device.stream(sensor, usePacked: true)
+        let stream = try await device.startStream(sensor, usePacked: true)
 
         let deadline = Date.now.addingTimeInterval(5)
         var count = 0

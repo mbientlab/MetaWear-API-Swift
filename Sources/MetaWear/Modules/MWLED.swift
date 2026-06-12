@@ -1,8 +1,33 @@
 import Foundation
 
+// MARK: - LED register opcodes (module 0x02)
+//
+// Names follow the C++ SDK header `Led.h` (the firmware `LedRegister` enum).
+// Used by `MWLED.Play` / `Pause` / `Stop` / `SetPattern` etc. below.
+
+enum MWLEDRegister: UInt8 {
+    /// PLAY — `[mod, 0x01, 0x01]` plays; `[mod, 0x01, 0x02]` autoplay; `[mod, 0x01, 0x00]` pauses.
+    case play       = 0x01
+    /// STOP — `[mod, 0x02, clearFlag]`. `clearFlag = 1` also erases configured patterns.
+    case stop       = 0x02
+    /// SETPATTERN — full 17-byte pattern config for one color channel.
+    case setPattern = 0x03
+}
+
 // MARK: - LED pattern
 
-/// The timing and intensity parameters for one color channel's LED pattern.
+/// One color channel's LED pulse shape.
+///
+/// The LED follows a four-phase envelope per pulse:
+/// 1. Ramp from `lowIntensity` to `highIntensity` over `riseTime` ms.
+/// 2. Hold at `highIntensity` for `highTime` ms.
+/// 3. Ramp from `highIntensity` back to `lowIntensity` over `fallTime` ms.
+/// 4. Hold at `lowIntensity` until `pulseDuration` ms have elapsed from the
+///    start of the pulse, then begin the next pulse.
+///
+/// `delay` offsets the first pulse, and `repeatCount` controls how many
+/// pulses play (`.max` / 0xFF = forever). Use the static presets (`solid`,
+/// `blink`, `breathe`, `flash`) as a starting point.
 public struct MWLEDPattern: Sendable, Equatable {
     /// LED brightness during the high phase (0–31).
     public var highIntensity: UInt8
@@ -18,7 +43,11 @@ public struct MWLEDPattern: Sendable, Equatable {
     public var pulseDuration: UInt16
     /// Time (ms) before the pattern starts. Useful to phase-offset multiple channels.
     public var delay: UInt16
-    /// Number of pulses to play. 0 = repeat indefinitely.
+    /// Number of pulses to play (1–254). `.max` (0xFF) = repeat indefinitely.
+    ///
+    /// The firmware treats a raw 0 as undefined behaviour, so the encoder
+    /// rewrites 0 to 0xFF (indefinite) — matching the C++ SDK's guidance
+    /// "use 0xFF, not 0; 0 causes undefined behaviour on firmware".
     public var repeatCount: UInt8
 
     public init(
@@ -29,7 +58,7 @@ public struct MWLEDPattern: Sendable, Equatable {
         fallTime: UInt16      = 0,
         pulseDuration: UInt16 = 1000,
         delay: UInt16         = 0,
-        repeatCount: UInt8    = 0
+        repeatCount: UInt8    = .max
     ) {
         self.highIntensity = highIntensity
         self.lowIntensity  = lowIntensity
@@ -76,8 +105,14 @@ public extension MWLEDPattern {
 public enum MWLED {
 
     /// Color channels available on all MetaWear boards.
+    /// Raw value matches the firmware's channel index.
     public enum Color: UInt8, Sendable, CaseIterable {
-        case green = 0, red = 1, blue = 2
+        /// Green channel. Raw value matches the firmware's channel index.
+        case green = 0
+        /// Red channel. Raw value matches the firmware's channel index.
+        case red = 1
+        /// Blue channel. Raw value matches the firmware's channel index.
+        case blue = 2
     }
 
     // MARK: - Command types
@@ -107,28 +142,30 @@ public enum MWLED {
             bytes += le16(pattern.fallTime)
             bytes += le16(pattern.pulseDuration)
             bytes += le16(pattern.delay)
-            bytes.append(pattern.repeatCount)
-            return MWPacket.command(.led, 0x03, bytes)
+            // Firmware UB guard: a raw repeat count of 0 is undefined on the
+            // board — encode it as 0xFF (indefinite) instead.
+            bytes.append(pattern.repeatCount == 0 ? .max : pattern.repeatCount)
+            return MWPacket.command(.led, MWLEDRegister.setPattern, bytes)
         }
     }
 
     /// Start LED playback (plays all configured channels).
     public struct Play: MWCommand, Sendable {
         public init() {}
-        public var commandData: Data { MWPacket.command(.led, 0x01, [0x01]) }
+        public var commandData: Data { MWPacket.command(.led, MWLEDRegister.play, [0x01]) }
     }
 
     /// Start LED playback and immediately play any patterns programmed in the future.
     /// Use this instead of `Play` when you want subsequent `SetPattern` commands to start automatically.
     public struct Autoplay: MWCommand, Sendable {
         public init() {}
-        public var commandData: Data { MWPacket.command(.led, 0x01, [0x02]) }
+        public var commandData: Data { MWPacket.command(.led, MWLEDRegister.play, [0x02]) }
     }
 
     /// Pause playback without clearing patterns.
     public struct Pause: MWCommand, Sendable {
         public init() {}
-        public var commandData: Data { MWPacket.command(.led, 0x01, [0x00]) }
+        public var commandData: Data { MWPacket.command(.led, MWLEDRegister.play, [0x00]) }
     }
 
     /// Stop playback.
@@ -141,7 +178,7 @@ public enum MWLED {
         }
 
         public var commandData: Data {
-            MWPacket.command(.led, 0x02, [clearPattern ? 0x01 : 0x00])
+            MWPacket.command(.led, MWLEDRegister.stop, [clearPattern ? 0x01 : 0x00])
         }
     }
 

@@ -48,15 +48,20 @@ struct LEDCommandTests {
         let cmd = MWLED.SetPattern(color: .green, pattern: p)
         let data = cmd.commandData
         // rise at [6,7]
-        #expect(data[6] == 0x02 && data[7] == 0x01)
+        #expect(data[6] == 0x02)
+        #expect(data[7] == 0x01)
         // high at [8,9]
-        #expect(data[8] == 0x04 && data[9] == 0x03)
+        #expect(data[8] == 0x04)
+        #expect(data[9] == 0x03)
         // fall at [10,11]
-        #expect(data[10] == 0x06 && data[11] == 0x05)
+        #expect(data[10] == 0x06)
+        #expect(data[11] == 0x05)
         // pulse at [12,13]
-        #expect(data[12] == 0x08 && data[13] == 0x07)
+        #expect(data[12] == 0x08)
+        #expect(data[13] == 0x07)
         // delay at [14,15]
-        #expect(data[14] == 0x0A && data[15] == 0x09)
+        #expect(data[14] == 0x0A)
+        #expect(data[15] == 0x09)
     }
 
     @Test func setPattern_repeatCountByte() {
@@ -66,10 +71,11 @@ struct LEDCommandTests {
     }
 
     @Test func setPattern_repeatCountZero_indefinite() {
-        // 0 means indefinite per protocol
+        // "Indefinite" is 0xFF on the wire — the firmware treats a raw 0 as
+        // undefined behaviour, so the encoder rewrites 0 to 0xFF.
         let p = MWLEDPattern(repeatCount: 0)
         let cmd = MWLED.SetPattern(color: .red, pattern: p)
-        #expect(cmd.commandData[16] == 0)
+        #expect(cmd.commandData[16] == 0xFF)
     }
 
     // MARK: - Preset patterns

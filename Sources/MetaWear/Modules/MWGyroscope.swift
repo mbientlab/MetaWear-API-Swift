@@ -1,11 +1,44 @@
 import Foundation
 
+// MARK: - Gyroscope register opcodes (module 0x13)
+//
+// Names follow the C++ SDK headers (`GyroBosch.h`, `GyroBmi270.h`). The basic
+// configure / enable / start / stop map is identical to the accelerometer
+// module (0x01–0x03 — see `MWAccelerometerRegister`); only the data and
+// packed-data registers differ between chips, and the BMI270 adds a 0x06
+// offsets register.
+
+enum MWGyroscopeRegister: UInt8 {
+    /// POWER — `[mod, 0x01, 0x01]` starts sampling; `[mod, 0x01, 0x00]` stops. Both chips.
+    case power               = 0x01
+    /// DATA_INTERRUPT_ENABLE — `[mod, 0x02, enable_mask, disable_mask]`. Both chips.
+    case dataInterruptEnable = 0x02
+    /// DATA_INTERRUPT_CONFIG — `[mod, 0x03, gyro_conf, range]`. Both chips share encoding.
+    case dataInterruptConfig = 0x03
+    /// BMI270: DATA_INTERRUPT (raw subscribe / notify). BMI160 uses 0x05.
+    case dataInterruptBMI270 = 0x04
+    /// BMI160: DATA (raw subscribe / notify). BMI270: PACKED_GYRO_DATA.
+    case dataBMI160_packedBMI270 = 0x05
+    /// BMI270 only: OFFSETS — writes signed (x, y, z) zero-offsets.
+    case offsetsBMI270       = 0x06
+    /// BMI160: PACKED_GYRO_DATA (3 samples per packet). BMI270 uses 0x05.
+    case packedGyroBMI160    = 0x07
+}
+
 // MARK: - Gyroscope (BMI160 / BMI270)
 // Both chips use the same config encoding; only the register map and data register differ.
 
-public struct MWGyroscopeBMI160: MWLoggable {
+/// Streams angular velocity (degrees / second) from the BMI160 gyroscope
+/// (module 0x13) on MetaMotion R / RL boards.
+///
+/// ```swift
+/// let stream = try await device.startStream(MWGyroscopeBMI160(odr: .hz100, range: .dps2000))
+/// for try await sample in stream { print(sample.value) }
+/// ```
+public struct MWGyroscopeBMI160: MWBoschIMUSensor {
     public typealias Sample = CartesianFloat
 
+    /// Output data rate. Raw values match C++ `MblMwGyroBoschOdr`.
     public enum ODR: UInt8, Sendable, CaseIterable {
         // Raw enum values match MblMwGyroBoschOdr (starts at 6)
         case hz25   = 6
@@ -22,6 +55,7 @@ public struct MWGyroscopeBMI160: MWLoggable {
         }
     }
 
+    /// Full-scale range. Higher values trade resolution for headroom.
     public enum Range: UInt8, Sendable, CaseIterable {
         case dps2000 = 0, dps1000, dps500, dps250, dps125
 
@@ -42,21 +76,19 @@ public struct MWGyroscopeBMI160: MWLoggable {
     // MARK: MWSensor
 
     public let module: MWModule = .gyro
-    public let dataRegister: UInt8 = 0x05           // DATA (BMI160)
-    public let packedDataRegister: UInt8? = 0x07    // PACKED_GYRO_DATA (BMI160)
+    public let dataRegister: UInt8 = MWGyroscopeRegister.dataBMI160_packedBMI270.rawValue
+    public let packedDataRegister: UInt8? = MWGyroscopeRegister.packedGyroBMI160.rawValue
 
-    // MARK: MWStreamable
+    // MARK: MWBoschIMUSensor — configure command payload
+    //
+    // BMI160 + BMI270 use the identical `gyro_conf` encoding: bits [3:0] = ODR,
+    // bits [6:4] = BWP (always 2 = normal).
 
-    public var configureCommands: [Data] {
+    var configPayload: [UInt8] {
         let bwp: UInt8 = 2
         let confByte: UInt8 = (bwp << 4) | odr.rawValue
-        return [MWPacket.command(.gyro, 0x03, [confByte, range.rawValue])]
+        return [confByte, range.rawValue]
     }
-
-    public var enableCommand:  Data { MWPacket.command(.gyro, 0x02, [0x01, 0x00]) }
-    public var startCommand:   Data { MWPacket.command(.gyro, 0x01, [0x01]) }
-    public var stopCommand:    Data { MWPacket.command(.gyro, 0x01, [0x00]) }
-    public var disableCommand: Data { MWPacket.command(.gyro, 0x02, [0x00, 0x01]) }
 
     public let loggerKey = "angular-velocity"
 
@@ -71,6 +103,10 @@ public struct MWGyroscopeBMI160: MWLoggable {
 
 // MARK: BMI270
 
+/// Streams angular velocity (degrees / second) from the BMI270 gyroscope
+/// (module 0x13) on MetaMotion S boards. Shares the `ODR` and `Range`
+/// encodings with `MWGyroscopeBMI160`, but uses a different data register and
+/// adds the BMI270-only `Offsets` calibration command.
 public struct MWGyroscopeBMI270: MWLoggable {
     public typealias Sample = CartesianFloat
 
@@ -88,21 +124,21 @@ public struct MWGyroscopeBMI270: MWLoggable {
     // MARK: MWSensor
 
     public let module: MWModule = .gyro
-    public let dataRegister: UInt8 = 0x04           // DATA (BMI270)
-    public let packedDataRegister: UInt8? = 0x05    // PACKED_GYRO_DATA (BMI270)
+    public let dataRegister: UInt8 = MWGyroscopeRegister.dataInterruptBMI270.rawValue
+    public let packedDataRegister: UInt8? = MWGyroscopeRegister.dataBMI160_packedBMI270.rawValue
 
     // MARK: MWStreamable
 
     public var configureCommands: [Data] {
         let bwp: UInt8 = 2
         let confByte: UInt8 = (bwp << 4) | odr.rawValue
-        return [MWPacket.command(.gyro, 0x03, [confByte, range.rawValue])]
+        return [MWPacket.command(.gyro, MWGyroscopeRegister.dataInterruptConfig, [confByte, range.rawValue])]
     }
 
-    public var enableCommand:  Data { MWPacket.command(.gyro, 0x02, [0x01, 0x00]) }
-    public var startCommand:   Data { MWPacket.command(.gyro, 0x01, [0x01]) }
-    public var stopCommand:    Data { MWPacket.command(.gyro, 0x01, [0x00]) }
-    public var disableCommand: Data { MWPacket.command(.gyro, 0x02, [0x00, 0x01]) }
+    public var enableCommand:  Data { MWPacket.command(.gyro, MWGyroscopeRegister.dataInterruptEnable, [0x01, 0x00]) }
+    public var startCommand:   Data { MWPacket.command(.gyro, MWGyroscopeRegister.power, [0x01]) }
+    public var stopCommand:    Data { MWPacket.command(.gyro, MWGyroscopeRegister.power, [0x00]) }
+    public var disableCommand: Data { MWPacket.command(.gyro, MWGyroscopeRegister.dataInterruptEnable, [0x00, 0x01]) }
 
     public let loggerKey = "angular-velocity"
 
@@ -117,7 +153,10 @@ public struct MWGyroscopeBMI270: MWLoggable {
     // MARK: BMI270 offsets
     //
     // Mirrors C++ `mbl_mw_gyro_bmi270_offsets(board, x, y, z)`.
-    // Writes signed offsets to OFFSET register 0x06.
+    // Writes signed offsets to `MWGyroscopeRegister.offsetsBMI270` (0x06).
+
+    /// BMI270-only zero-offset calibration. Writes signed per-axis offsets to
+    /// register 0x06; subsequent samples have the offsets applied in hardware.
     public struct Offsets: MWCommand {
         public let x: UInt8
         public let y: UInt8
@@ -126,13 +165,18 @@ public struct MWGyroscopeBMI270: MWLoggable {
             self.x = x; self.y = y; self.z = z
         }
         public var commandData: Data {
-            MWPacket.command(.gyro, 0x06, x, y, z)
+            MWPacket.command(.gyro, MWGyroscopeRegister.offsetsBMI270, x, y, z)
         }
     }
 }
 
 // MARK: - Type-erased gyroscope (chosen at runtime from module info)
 
+/// Type-erased gyroscope chosen at runtime from the board's reported chip ID.
+///
+/// Use `make(impl:odrHz:rangeDPS:)` to construct one from the implementation
+/// byte returned during module discovery; the requested ODR / range are
+/// snapped to the nearest value the underlying chip supports.
 public enum MWGyroscope: Sendable {
     case bmi160(MWGyroscopeBMI160)
     case bmi270(MWGyroscopeBMI270)

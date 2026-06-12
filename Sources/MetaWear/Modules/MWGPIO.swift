@@ -15,7 +15,7 @@ import Foundation
 ///
 /// Usage — stream pin-change notifications:
 /// ```swift
-/// let changes = try await device.stream(MWGPIOPinChange(pin: 0, type: .any))
+/// let changes = try await device.startStream(MWGPIOPinChange(pin: 0, type: .any))
 /// for try await change in changes {
 ///     print("Pin 0 is now", change.value ? "HIGH" : "LOW")
 /// }
@@ -262,7 +262,9 @@ public struct MWGPIOPinChange: MWStreamable {
 
 /// The state of a GPIO pin at the moment of a change notification.
 public struct MWGPIOSample: Sendable {
+    /// 0-based pin index that triggered the notification.
     public let pin: UInt8
+    /// `true` when the pin is HIGH, `false` when LOW.
     public let isHigh: Bool
 }
 

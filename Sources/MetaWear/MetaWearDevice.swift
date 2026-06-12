@@ -5,6 +5,7 @@ import Foundation
 
 public enum DeviceState: Equatable, Sendable {
     case disconnected
+    case connecting
     case idle
     case streaming
     case logging
@@ -22,7 +23,7 @@ public actor MetaWearDevice {
     public private(set) var state: DeviceState = .disconnected
     public private(set) var deviceInfo: MWDeviceInformation?
     public private(set) var modules: [MWModule: MWModuleInfo] = [:]
-    public let identifier: UUID
+    public nonisolated let identifier: UUID
 
     /// Called when BLE drops unexpectedly (not via `disconnect()`).
     /// Use this to update your UI and optionally call `reconnect()`.
@@ -68,12 +69,18 @@ public actor MetaWearDevice {
             mwLog("[Device] connect: already connected or connecting")
             throw MWError.invalidState("Already connected or connecting")
         }
-        try await transport.connect(to: identifier)
-        await proto.start()
-        hookDisconnectCallback()
-        try await initialize()
-        state = .idle
-        mwLog("[Device] connect: ready")
+        state = .connecting
+        do {
+            try await transport.connect(to: identifier)
+            await proto.start()
+            await hookDisconnectCallback()
+            try await initialize()
+            state = .idle
+            mwLog("[Device] connect: ready")
+        } catch {
+            state = .disconnected
+            throw error
+        }
     }
 
     /// Reconnect after an unexpected BLE drop.
@@ -94,22 +101,119 @@ public actor MetaWearDevice {
         mwLog("[Device] disconnect: done")
     }
 
+    // MARK: - Factory reset
+
+    /// Scrub all on-device runtime state and reboot the board.
+    ///
+    /// Equivalent to the C-API call sequence:
+    /// ```
+    /// mbl_mw_logging_stop(board);
+    /// mbl_mw_logging_clear_entries(board);
+    /// mbl_mw_event_remove_all(board);
+    /// mbl_mw_dataprocessor_remove_all(board);
+    /// mbl_mw_macro_erase_all(board);
+    /// mbl_mw_debug_reset_after_gc(board);
+    /// ```
+    ///
+    /// The wire sequence (write-without-response, in order) is:
+    /// 1. `[0x0B, 0x01, 0x00]` — stop logging
+    /// 2. `[0x0B, 0x09, 0xFF, 0xFF, 0xFF, 0xFF]` — drop all log entries
+    /// 3. `[0x0B, 0x0A]` — remove all logger triggers
+    /// 4. `[0x0A, 0x05]` — remove all event bindings
+    /// 5. `[0x09, 0x08]` — remove all data processors
+    /// 6. `[0x0F, 0x08]` — erase all macros
+    /// 7. `[0xFE, 0x05]` — reset after garbage collection (preferred reboot trigger)
+    /// 8. `[0xFE, 0x01]` — immediate reset (fallback: some firmware revisions —
+    ///    notably MMS fw 1.5.0 — silently ignore `[0xFE, 0x05]` if the board
+    ///    has nothing pending in flash GC, leaving the resetUID unincremented
+    ///    and the boot counter unchanged. Step 8 forces the reboot. If step 7
+    ///    already triggered a reset, the BLE link is gone and step 8 is
+    ///    dropped, which is exactly what we want.)
+    ///
+    /// After steps 7–8 the BLE link drops and the actor transitions to `.disconnected`.
+    /// The `onUnexpectedDisconnect` callback is suppressed because this disconnect
+    /// is intentional. Call `connect()` (or `reconnect()`) again after a short
+    /// delay (~1s) to bring the device back up.
+    ///
+    /// - Note: Active timers and currently-streaming sensor outputs aren't stopped
+    ///   explicitly — the reboot in step 7 clears all volatile state, including
+    ///   sensor output enables and timer handles, so they're swept up automatically.
+    ///
+    /// - Throws: `MWError.invalidState` if the device is already `.disconnected`,
+    ///   or any underlying transport error if a write fails before the reset
+    ///   command lands. Once a write fails the sequence aborts — partial resets
+    ///   are possible but rare in practice (each step is a single write).
+    public func factoryReset() async throws {
+        mwLog("[Device] factoryReset: \(identifier)")
+        guard state != .disconnected else {
+            throw MWError.invalidState("Cannot factory-reset a disconnected device")
+        }
+
+        // Suppress the unexpected-disconnect callback: the reset we're about to
+        // trigger will drop BLE, but it's intentional, not an unexpected drop.
+        await proto.clearDisconnectHandler()
+
+        // 1. Stop active logging. Use a raw write rather than `stopLogging(_:)`
+        //    because that overload requires a specific MWLoggable handle, and we
+        //    don't (and shouldn't) need to know which sensors are running.
+        try await proto.write(MWPacket.command(.logging, 0x01, 0x00))
+
+        // 2. Drop all log entries from flash. Mirrors `mbl_mw_logging_clear_entries`.
+        try await proto.write(MWPacket.command(.logging, 0x09, 0xFF, 0xFF, 0xFF, 0xFF))
+
+        // 3. Remove all logger triggers (subscriptions assigned via [0x0B, 0x02, ...]).
+        try await proto.write(MWPacket.command(.logging, 0x0A))
+
+        // 4. Remove all event bindings. Mirrors `mbl_mw_event_remove_all`.
+        try await removeAllEvents()
+
+        // 5. Remove all data processors. Mirrors `mbl_mw_dataprocessor_remove_all`.
+        //    Also tears down the processor demux task and finishes any open
+        //    processor streams on the Swift side.
+        try await removeAllProcessors()
+
+        // 6. Erase all macros. Mirrors `mbl_mw_macro_erase_all`.
+        try await eraseAllMacros()
+
+        // 7. Reset after GC — the firmware finishes garbage collection of the
+        //    flash regions we just freed, then reboots. BLE drops momentarily.
+        try await send(MWDebug.ResetAfterGC())
+
+        // 8. Immediate reset fallback — see the doc comment above. On MMS
+        //    firmware revisions where step 7 is a no-op, this guarantees the
+        //    reboot. We swallow any error here because the link may already
+        //    be gone (which is what success looks like).
+        try? await send(MWDebug.Reset())
+
+        // Local cleanup. The wire side is done; the link will drop on the
+        // next BLE event. Tear down the protocol layer and zero out the in-
+        // memory caches that won't survive the reboot.
+        await proto.stop()
+        state = .disconnected
+        activeStreamModules.removeAll()
+        loggerRegistry.removeAll()
+        logReferenceDate = nil
+        // deviceInfo and `modules` describe immutable hardware — preserved so
+        // the caller can decide whether to reuse them after `reconnect()`.
+        mwLog("[Device] factoryReset: done")
+    }
+
     // MARK: - Streaming
 
     /// Stream a sensor signal continuously.
     ///
     /// Usage:
     /// ```swift
-    /// let stream = try await device.stream(MWAccelerometerBMI160(odr: .hz100, range: .g2))
+    /// let stream = try await device.startStream(MWAccelerometerBMI160(odr: .hz100, range: .g2))
     /// for try await sample in stream {
     ///     print(sample.time, sample.value.x, sample.value.y, sample.value.z)
     /// }
     /// ```
-    public func stream<S: MWStreamable>(
+    public func startStream<S: MWStreamable>(
         _ sensor: S,
         usePacked: Bool = true
     ) async throws -> AsyncThrowingStream<Timestamped<S.Sample>, Error> {
-        mwLog("[Device] stream: \(sensor.module) packed=\(usePacked)")
+        mwLog("[Device] startStream: \(sensor.module.name) packed=\(usePacked)")
         switch state {
         case .idle, .streaming: break
         default: throw MWError.invalidState("Device must be idle or streaming to add a sensor")
@@ -128,20 +232,33 @@ public actor MetaWearDevice {
         }
 
         // C++ equivalent:
+        //   (optional warmup)                     → warmupCommands + delay
         //   mbl_mw_acc_write_acceleration_config  → configureCommands
         //   mbl_mw_datasignal_subscribe           → [module, register, 0x01]
         //   mbl_mw_acc_enable_acceleration_sampling → enableCommand
         //   mbl_mw_acc_start                      → startCommand
-        for cmd in sensor.configureCommands where !cmd.isEmpty { try await proto.write(cmd) }
-        try await proto.write(MWPacket.command(sensor.module, register, [0x01]))
-        if !sensor.enableCommand.isEmpty { try await proto.write(sensor.enableCommand) }
-        if !sensor.startCommand.isEmpty  { try await proto.write(sensor.startCommand) }
+        do {
+            for cmd in sensor.warmupCommands where !cmd.isEmpty { try await proto.write(cmd) }
+            if sensor.warmupDelayNanos > 0 {
+                try await Task.sleep(for: .nanoseconds(sensor.warmupDelayNanos))
+            }
+            for cmd in sensor.configureCommands where !cmd.isEmpty { try await proto.write(cmd) }
+            try await proto.write(MWPacket.command(sensor.module, register, [0x01]))
+            for cmd in sensor.enableCommands where !cmd.isEmpty { try await proto.write(cmd) }
+            for cmd in sensor.startCommands  where !cmd.isEmpty { try await proto.write(cmd) }
+        } catch {
+            // Roll back — the sensor never started. Leaving it marked active
+            // would block any retry with "already streaming".
+            activeStreamModules.remove(sensor.module)
+            state = activeStreamModules.isEmpty ? .idle : .streaming
+            throw error
+        }
 
         let rawStream = await proto.subscribe(to: sensor.module, register: register)
         let isPacked = usePacked && sensor.packedDataRegister != nil
 
         return AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
                     for try await packet in rawStream {
                         let now = Date()
@@ -160,19 +277,55 @@ public actor MetaWearDevice {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
+    /// Run a streamable signal's configure → enable → start commands without
+    /// subscribing to its BLE notifications.
+    ///
+    /// Use when something on-board — typically a data processor created via
+    /// `createProcessor(_:source:)` — consumes the signal directly. The host
+    /// only needs the sensor's data path running; the processor pulls samples
+    /// off the bus without any host involvement.
+    ///
+    /// Unlike `startStream(_:)`, this does not engage BLE notifications and
+    /// does not move the device into `.streaming`. The device stays `.idle`,
+    /// so a subsequent `startLogging(_:key:)` can succeed against a processor
+    /// fed by the prepared source.
+    ///
+    /// Pair with `teardownSignalSource(_:)` to stop the sensor when done.
+    public func prepareSignalSource<S: MWStreamable>(_ sensor: S) async throws {
+        mwLog("[Device] prepareSignalSource: \(sensor.module.name)")
+        try checkSensorConflict(adding: sensor.module)
+        for cmd in sensor.warmupCommands where !cmd.isEmpty { try await proto.write(cmd) }
+        if sensor.warmupDelayNanos > 0 {
+            try await Task.sleep(for: .nanoseconds(sensor.warmupDelayNanos))
+        }
+        for cmd in sensor.configureCommands where !cmd.isEmpty { try await proto.write(cmd) }
+        for cmd in sensor.enableCommands    where !cmd.isEmpty { try await proto.write(cmd) }
+        for cmd in sensor.startCommands     where !cmd.isEmpty { try await proto.write(cmd) }
+    }
+
+    /// Run a streamable signal's stop → disable commands. Undoes the effect of
+    /// `prepareSignalSource(_:)` without touching subscription state (since
+    /// `prepareSignalSource` never subscribed in the first place).
+    public func teardownSignalSource<S: MWStreamable>(_ sensor: S) async throws {
+        mwLog("[Device] teardownSignalSource: \(sensor.module.name)")
+        for cmd in sensor.stopCommands    where !cmd.isEmpty { try await proto.write(cmd) }
+        for cmd in sensor.disableCommands where !cmd.isEmpty { try await proto.write(cmd) }
+    }
+
     public func stopStreaming<S: MWStreamable>(_ sensor: S) async throws {
-        mwLog("[Device] stopStreaming: \(sensor.module)")
+        mwLog("[Device] stopStreaming: \(sensor.module.name)")
         guard case .streaming = state else { return }
 
         // C++ equivalent:
         //   mbl_mw_acc_stop                        → stopCommand
         //   mbl_mw_acc_disable_acceleration_sampling → disableCommand
         //   mbl_mw_datasignal_unsubscribe           → [module, register, 0x00]
-        if !sensor.stopCommand.isEmpty    { try await proto.write(sensor.stopCommand) }
-        if !sensor.disableCommand.isEmpty { try await proto.write(sensor.disableCommand) }
+        for cmd in sensor.stopCommands    where !cmd.isEmpty { try await proto.write(cmd) }
+        for cmd in sensor.disableCommands where !cmd.isEmpty { try await proto.write(cmd) }
         try await proto.write(MWPacket.command(sensor.module, sensor.dataRegister, [0x00]))
         if let packed = sensor.packedDataRegister {
             try await proto.write(MWPacket.command(sensor.module, packed, [0x00]))
@@ -188,25 +341,62 @@ public actor MetaWearDevice {
     // MARK: - Logging
 
     public func startLogging<L: MWLoggable>(_ loggable: L) async throws {
-        mwLog("[Device] startLogging: \(loggable.module)")
-        guard case .idle = state else {
-            throw MWError.invalidState("Device must be idle to log")
+        mwLog("[Device] startLogging: \(loggable.module.name)")
+        // Allow stacking — multiple distinct sensors can be added to one
+        // logging session by calling this once per sensor while the device is
+        // already in `.logging`. But the same signal cannot be subscribed
+        // twice: doing so would allocate a duplicate logger-ID on flash, leak
+        // the first subscription's chunk entries, and silently overwrite
+        // `loggerRegistry[loggerKey]`. Mirrors the conflict check in
+        // `checkSensorConflict` for the streaming path, and the duplicate-key
+        // guard in the processor-handle `startLogging(_:key:)` overload.
+        switch state {
+        case .idle, .logging: break
+        default:
+            throw MWError.invalidState("Device must be idle or already logging")
         }
+        if loggerRegistry[loggable.loggerKey] != nil {
+            throw MWError.invalidState("\(loggable.loggerKey) is already being logged")
+        }
+        let priorState = state
         state = .logging
+        do {
+
+        // Cold-boot warmup (e.g. BMM150 SLEEP-then-settle). Must precede
+        // configureCommands — without this the magnetometer silently produces
+        // zero samples on a freshly-powered MetaMotion (matches the streaming
+        // path in `prepareSignalSource`). See `MWStreamable.warmupCommands`.
+        for cmd in loggable.warmupCommands where !cmd.isEmpty { try await proto.write(cmd) }
+        if loggable.warmupDelayNanos > 0 {
+            try await Task.sleep(for: .nanoseconds(loggable.warmupDelayNanos))
+        }
 
         // Configure sensor hardware
         for cmd in loggable.configureCommands { try await proto.write(cmd) }
 
         // Subscribe each data chunk to the logger and collect the assigned IDs.
-        // Command: [0x0B, 0x02, module, register, 0xFF, (offset<<5 | length-1)]
-        // Response: [0x0B, 0x82, logger_id]
+        // Command:  [0x0B, 0x02, module, register, 0xFF, ((length-1)<<5 | offset)]
+        // Response: [0x0B, 0x02, logger_id]   ← plain notification, NOT a read
+        //                                       response (high bit stays clear)
+        //
+        // Must use `writeAndAwaitNotification` here, not `writeAndRead` — the
+        // proto layer's read waiters only fire on responses with bit-7 set on
+        // the register byte, but the firmware's TRIGGER_DATA_PROC reply comes
+        // back as a plain notification.
+        //
+        // Encoding matches MetaWear-SDK-Cpp datasignal.cpp `get_data_ubyte()`
+        // (`((length() - 1) << 5) | offset`) and logging.cpp:868
+        // (`((entry_size - 1) << 5) | entry_offset`). The packed byte is decoded
+        // back the same way in `queryActiveLoggers()` below.
         var chunks: [(id: UInt8, byteCount: Int)] = []
         for chunk in loggable.logDataChunks {
-            let packedByte: UInt8 = (chunk.offset << 5) | (chunk.length &- 1)
+            let packedByte: UInt8 = ((chunk.length &- 1) << 5) | chunk.offset
             let cmd = Data([MWModule.logging.rawValue, 0x02,
                             loggable.module.rawValue, loggable.dataRegister,
                             0xFF, packedByte])
-            let response = try await proto.writeAndRead(command: cmd, awaitModule: .logging, awaitRegister: 0x02)
+            let response = try await proto.writeAndAwaitNotification(
+                command: cmd, awaitModule: .logging, awaitRegister: 0x02
+            )
             guard response.count >= 3 else {
                 throw MWError.operationFailed("Logger subscription returned short response")
             }
@@ -215,31 +405,216 @@ public actor MetaWearDevice {
         loggerRegistry[loggable.loggerKey] = chunks
 
         // Enable sensor output and start hardware
-        try await proto.write(loggable.enableCommand)
-        try await proto.write(loggable.startCommand)
+        for cmd in loggable.enableCommands where !cmd.isEmpty { try await proto.write(cmd) }
+        for cmd in loggable.startCommands  where !cmd.isEmpty { try await proto.write(cmd) }
 
         // Enable circular buffer and start logging
         try await proto.write(MWPacket.command(.logging, 0x0B, [0x01]))  // circular buffer on
         try await proto.write(MWPacket.command(.logging, 0x01, [0x01]))  // enable logging
+
+        } catch {
+            // Roll back — the logging session never started. Loggers already
+            // subscribed on the board are orphaned (cleared by `clearLog()` /
+            // `factoryReset()`), but the Swift-side state must not claim an
+            // active session, or every retry fails with "already being logged".
+            loggerRegistry.removeValue(forKey: loggable.loggerKey)
+            state = priorState
+            throw error
+        }
     }
 
     public func stopLogging<L: MWLoggable>(_ loggable: L) async throws {
-        mwLog("[Device] stopLogging: \(loggable.module)")
-        guard case .logging = state else { return }
+        mwLog("[Device] stopLogging: \(loggable.module.name)")
+        // No guard on `state == .logging`: the first call in a multi-sensor
+        // stop sequence drops state to `.idle`, but each subsequent sensor
+        // still needs its own stop + disable writes — otherwise the board
+        // keeps sampling that sensor (and `downloadLogs` returns no entries
+        // because the logger never sees a fresh session marker).
         try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))  // stop logging
-        try await proto.write(loggable.stopCommand)
-        try await proto.write(loggable.disableCommand)
+        for cmd in loggable.stopCommands    where !cmd.isEmpty { try await proto.write(cmd) }
+        for cmd in loggable.disableCommands where !cmd.isEmpty { try await proto.write(cmd) }
         state = .idle
+    }
+
+    // MARK: - Polled-readable logging
+
+    /// Start logging a read-only (`MWReadable`) sensor by pairing an on-board
+    /// timer with an event that triggers the read, then subscribing a logger
+    /// to the read response. The board fires reads at `logger.periodMs`
+    /// intervals and writes each result to flash without host involvement —
+    /// keeps working across disconnects, app close, etc.
+    ///
+    /// - Returns: The board-allocated `timerID`, `eventID`, and logger IDs.
+    ///   Persist these so a later `stopLogging(_:handles:)` can dismantle
+    ///   the chain and `recoverLoggers(for:)` can rebuild the registry
+    ///   after a fresh app launch.
+    public func startLogging<R: MWPolledLoggable>(
+        _ logger: MWPolledLogger<R>
+    ) async throws -> MWPolledLoggerHandles {
+        mwLog("[Device] startLogging polled: \(logger.readable.module.name) period=\(logger.periodMs)ms")
+        switch state {
+        case .idle, .logging: break
+        default:
+            throw MWError.invalidState("Device must be idle or already logging")
+        }
+        // Same rationale as the `MWLoggable` overload: a duplicate subscription
+        // would orphan the first logger ID on flash and clobber the registry
+        // entry, making download incomplete. The check is before `state = .logging`
+        // so a rejected duplicate leaves the device in its prior state intact.
+        if loggerRegistry[logger.loggerKey] != nil {
+            throw MWError.invalidState("\(logger.loggerKey) is already being logged")
+        }
+        let priorState = state
+        state = .logging
+        do {
+
+        // 1. Create the on-board timer that drives the reads.
+        let timer = try await createTimer(periodMs: logger.periodMs)
+
+        // 2. Record an event: when the timer fires, execute the readable's
+        //    readCommand. The board issues the read internally; the response
+        //    flows back out through the readable's data register as a normal
+        //    notification, where the logger picks it up below.
+        let readData = logger.readable.readCommand
+        let action: MWEventAction = {
+            let module = MWModule(rawValue: readData[0]) ?? .debug
+            let register = readData.count > 1 ? readData[1] : 0
+            let params = readData.count > 2 ? readData.advanced(by: 2) : Data()
+            return MWEventAction(module: module, register: register, params: params)
+        }()
+        let event = try await createEvent(
+            source: .timerFired(timer),
+            action: action
+        )
+
+        // 3. Subscribe a logger per chunk on the readable's data register.
+        //    Identical wire pattern to MWLoggable subscription (see the
+        //    `startLogging<L: MWLoggable>` overload above for the protocol
+        //    detail). Logger ID is returned in the reply notification.
+        var chunks: [(id: UInt8, byteCount: Int)] = []
+        for chunk in logger.readable.logDataChunks {
+            let packedByte: UInt8 = ((chunk.length &- 1) << 5) | chunk.offset
+            let cmd = Data([MWModule.logging.rawValue, 0x02,
+                            logger.readable.module.rawValue,
+                            logger.readable.dataRegister,
+                            0xFF, packedByte])
+            let response = try await proto.writeAndAwaitNotification(
+                command: cmd, awaitModule: .logging, awaitRegister: 0x02
+            )
+            guard response.count >= 3 else {
+                throw MWError.operationFailed("Polled logger subscription returned short response")
+            }
+            chunks.append((id: response[2], byteCount: Int(chunk.length)))
+        }
+        loggerRegistry[logger.loggerKey] = chunks
+
+        // 4. Enable the logging module + circular buffer, then kick off the
+        //    timer. Order matters — start the timer last so the first read
+        //    fires into a ready logger.
+        try await proto.write(MWPacket.command(.logging, 0x0B, [0x01]))
+        try await proto.write(MWPacket.command(.logging, 0x01, [0x01]))
+        try await startTimer(timer)
+
+        return MWPolledLoggerHandles(
+            timerID: timer.id,
+            eventID: event.id,
+            loggerIDs: chunks.map(\.id)
+        )
+
+        } catch {
+            // Roll back — the polled session never started. Board-side
+            // resources allocated before the failure (timer, event, loggers)
+            // are orphaned; `clearLog()`/`factoryReset()` reclaims them.
+            loggerRegistry.removeValue(forKey: logger.loggerKey)
+            state = priorState
+            throw error
+        }
+    }
+
+    /// Tear down a polled logger: stop and remove the timer, remove the
+    /// event binding, stop the logging module. Logger registrations stay
+    /// in the registry so a subsequent `downloadLogs(_:)` can drain the
+    /// flash entries before they're cleared.
+    public func stopLogging<R: MWPolledLoggable>(
+        _ logger: MWPolledLogger<R>,
+        handles: MWPolledLoggerHandles
+    ) async throws {
+        mwLog("[Device] stopLogging polled: \(logger.readable.module.name)")
+        // Same reasoning as the MWLoggable overload: don't gate on
+        // `state == .logging` because the first sensor stopped in a
+        // multi-sensor session has already moved state to .idle.
+        let timer = MWTimer(
+            id: handles.timerID,
+            periodMs: logger.periodMs,
+            repetitions: MWTimer.infinite,
+            immediate: false
+        )
+        // Best-effort teardown — if a single sub-step fails we still want to
+        // try the others rather than leaving half a chain on the board.
+        try? await stopTimer(timer)
+        try? await removeTimer(timer)
+        try? await removeEvent(MWEvent(id: handles.eventID))
+        try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))
+        state = .idle
+    }
+
+    /// Drain the typed log stream for a polled logger. Reuses the existing
+    /// closure-based `downloadLogs<S>(key:decode:)` so all the chunk-
+    /// reassembly logic stays in one place.
+    public func downloadLogs<R: MWPolledLoggable>(
+        _ logger: MWPolledLogger<R>
+    ) async throws -> AsyncThrowingStream<Download<[MWLoggedSample<R.Sample>]>, Error> {
+        let readable = logger.readable
+        return try await downloadLogs(key: logger.loggerKey) { data in
+            try readable.parseLogSample(from: data)
+        }
+    }
+
+    /// Refresh `loggerRegistry` for a polled logger by matching the
+    /// board's active loggers against the readable's module + data
+    /// register. Used after app restart when the registry was lost but
+    /// the board's timer + event + logger are still running.
+    public func recoverLoggers<R: MWPolledLoggable>(
+        for logger: MWPolledLogger<R>
+    ) async throws {
+        let active = try await queryActiveLoggers()
+        let matched = active
+            .filter { $0.module == logger.readable.module && $0.register == logger.readable.dataRegister }
+            .sorted { $0.loggerID < $1.loggerID }
+        guard !matched.isEmpty else {
+            throw MWError.operationFailed(
+                "No active polled logger found for '\(logger.loggerKey)' on \(logger.readable.module.name)/\(logger.readable.dataRegister)"
+            )
+        }
+        let chunks: [(id: UInt8, byteCount: Int)] = zip(matched, logger.readable.logDataChunks).map {
+            (id: $0.loggerID, byteCount: Int($1.length))
+        }
+        loggerRegistry[logger.loggerKey] = chunks
     }
 
     /// Download raw log entries from the device.
     /// Returns a stream of progress snapshots, each containing all entries received so far.
+    ///
+    /// On MMS boards (logging revision ≥ 3) the firmware buffers the active log
+    /// page in RAM and only commits to flash when the page fills, so a short
+    /// session (a few seconds at low ODR — small enough that the page never
+    /// completes before stop) leaves its samples stranded. `LOG_LENGTH` then
+    /// reads 0 and the download finishes empty even though the sensor produced
+    /// data. We force-flush the active page here so that workflow shape always
+    /// works without the caller having to remember `flushLogPage()`. The flush
+    /// is a no-op on MMRL (logging revision < 3).
     public func downloadLogs() async throws -> AsyncThrowingStream<Download<[RawLogEntry]>, Error> {
         mwLog("[Device] downloadLogs")
         guard case .idle = state else {
             throw MWError.invalidState("Device must be idle to download")
         }
         state = .downloading(progress: 0)
+
+        // Force-flush any partial page sitting in RAM so the LOG_LENGTH read
+        // below reflects every captured sample. Idempotent — safe to call even
+        // if the user already invoked `flushLogPage()` explicitly. No-op on
+        // pre-MMS firmware (revision < 3).
+        _ = try await flushLogPage()
 
         // Enable readout-notify and progress channels, then read the entry count.
         try await proto.write(MWPacket.command(.logging, 0x07, [0x01]))  // enable readout notify
@@ -257,6 +632,20 @@ public actor MetaWearDevice {
         }
         let nEntries = MWPacketParser.parseUInt32LE(lengthResponse, offset: 2)
 
+        // Empty log buffer: short-circuit. Issuing the readout with count=0
+        // produces no `0x07` raw entries, no `0x0D` page-completed notice, and
+        // no `0x08` progress update — `runDownload` would block on
+        // `progressStream` forever. Yield a single 100% snapshot with no data
+        // and finish.
+        if nEntries == 0 {
+            state = .idle
+            let (stream, continuation) = AsyncThrowingStream<Download<[RawLogEntry]>, Error>.makeStream()
+            continuation.yield(Download(data: [], percentComplete: 1.0,
+                                        totalEntries: 0, entriesDownloaded: 0))
+            continuation.finish()
+            return stream
+        }
+
         // Readout: [0x0B, 0x06, n_entries(4 LE), n_notify(4 LE)]
         // n_notify = 0 means one progress update per page.
         let cmd = MWPacket.command(.logging, 0x06,
@@ -264,14 +653,16 @@ public actor MetaWearDevice {
         try await proto.write(cmd)
 
         let (stream, continuation) = AsyncThrowingStream<Download<[RawLogEntry]>, Error>.makeStream()
-        Task { [self] in
+        let downloadTask = Task { [self] in
             await self.runDownload(
                 rawStream: rawStream,
                 progressStream: progressStream,
                 pageStream: pageStream,
+                totalEntries: nEntries,
                 continuation: continuation
             )
         }
+        continuation.onTermination = { _ in downloadTask.cancel() }
         return stream
     }
 
@@ -288,28 +679,216 @@ public actor MetaWearDevice {
         let rawStream = try await downloadLogs()
         let (typed, cont) = AsyncThrowingStream<Download<[MWLoggedSample<L.Sample>]>, Error>.makeStream()
 
-        Task {
+        let decodingTask = Task {
             do {
                 for try await progress in rawStream {
                     let decoded = try decodeEntries(progress.data, chunks: chunks, loggable: loggable)
-                    cont.yield(Download(data: decoded, percentComplete: progress.percentComplete))
+                    cont.yield(Download(data: decoded, percentComplete: progress.percentComplete, totalEntries: progress.totalEntries, entriesDownloaded: progress.entriesDownloaded))
                 }
                 cont.finish()
             } catch {
                 cont.finish(throwing: error)
             }
         }
+        cont.onTermination = { _ in decodingTask.cancel() }
+        return typed
+    }
+
+    // MARK: - Logging — processor handle
+    //
+    // Logging the *output* of a data processor (rather than a raw sensor) is a
+    // common pattern: throttle a 100 Hz fusion stream down to 1 Hz before
+    // committing it to flash, accumulate axis magnitudes, gate on a comparator,
+    // etc. The wire shape is the same as sensor logging — `[0x0B, 0x02, src_mod,
+    // src_reg, src_id, packed]` — except the source triple is the processor's
+    // NOTIFY register: `(0x09, 0x03, processorID)`.
+    //
+    // The caller passes a string `key` to identify the logger registration so
+    // it can be matched up with a `downloadLogs` call later. Sensor lifecycle
+    // (configure / enable / start / stop the source signal feeding the
+    // processor chain) is the caller's responsibility — `startLogging(handle:)`
+    // only wires the processor output to flash.
+
+    /// Start logging the output of a data processor.
+    ///
+    /// The handle's full output (per `nChannels × channelSize`) is split into
+    /// chunks of up to 4 bytes — the firmware's per-entry byte limit — and one
+    /// logger ID is allocated per chunk. IDs are stored under `key` so a later
+    /// `downloadLogs(key:decode:)` call can reassemble the chunks back into
+    /// full samples.
+    ///
+    /// The caller must already have started the source sensor(s) feeding the
+    /// processor chain. This method does not touch any sensor lifecycle — it
+    /// only enables the logging module and circular buffer.
+    ///
+    /// Typical flow:
+    /// ```swift
+    /// // Configure + start the source sensor that feeds the processor chain.
+    /// let euler = MWSensorFusionEuler(mode: .ndof, chip: .bmi160)
+    /// for cmd in euler.configureCommands { try await device.send(MWPacket.raw(cmd)) }
+    /// for cmd in euler.enableCommands    { try await device.send(MWPacket.raw(cmd)) }
+    /// for cmd in euler.startCommands     { try await device.send(MWPacket.raw(cmd)) }
+    ///
+    /// // Throttle euler to 1 Hz, log the throttled output.
+    /// let throttle = try await device.createProcessor(
+    ///     MWDataProcessor.Time(periodMs: 1000, mode: .absolute),
+    ///     source: MWSensorFusionEulerSignal()
+    /// )
+    /// try await device.startLogging(throttle, key: "euler-1hz")
+    ///
+    /// // ...later...
+    /// try await device.stopLogging(key: "euler-1hz")
+    /// for cmd in euler.stopCommands    { try await device.send(MWPacket.raw(cmd)) }
+    /// for cmd in euler.disableCommands { try await device.send(MWPacket.raw(cmd)) }
+    /// try await device.flushLogPage()
+    ///
+    /// let download = try await device.downloadLogs(key: "euler-1hz") { data in
+    ///     try MWPacketParser.parseEulerAngles(Data([0x19, 0x08]) + data)
+    /// }
+    /// for try await progress in download { /* ... */ }
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - handle: A processor handle returned from `createProcessor(_:source:)`.
+    ///   - key:    A unique string under which to register the logger IDs.
+    ///             Use the same `key` later in `downloadLogs(key:decode:)`.
+    public func startLogging(_ handle: MWProcessorHandle, key: String) async throws {
+        mwLog("[Device] startLogging(processor): id=\(handle.id) key=\(key)")
+        guard case .idle = state else {
+            throw MWError.invalidState("Device must be idle to log")
+        }
+        guard loggerRegistry[key] == nil else {
+            throw MWError.invalidState("Logger key '\(key)' already registered")
+        }
+        state = .logging
+        do {
+
+        // Slice the processor's output into <=4-byte chunks. The firmware's
+        // per-flash-entry limit is 4 bytes (LOG_ENTRY_DATA_SIZE). Sample size is
+        // nChannels × channelSize — e.g. 16 bytes for euler/quat (4 × float32),
+        // 12 bytes for gravity/linear-acc (3 × float32).
+        let totalLen = Int(handle.dataLength)
+        var chunkOffsets: [(offset: UInt8, length: UInt8)] = []
+        var pos = 0
+        while pos < totalLen {
+            let len = min(4, totalLen - pos)
+            chunkOffsets.append((offset: UInt8(pos), length: UInt8(len)))
+            pos += len
+        }
+
+        // Subscribe each chunk and collect the assigned logger IDs.
+        // Wire:     [0x0B, 0x02, 0x09, 0x03, proc_id, packed]
+        // Response: [0x0B, 0x02, logger_id]  ← plain notification (not a read
+        //                                      response — high bit stays clear)
+        // packed = ((length-1) << 5) | offset (matches C++ datasignal.cpp:162)
+        // Use `writeAndAwaitNotification` (not `writeAndRead`): the firmware's
+        // TRIGGER_DATA_PROC reply doesn't set bit-7 on the register byte.
+        var chunks: [(id: UInt8, byteCount: Int)] = []
+        for chunk in chunkOffsets {
+            let packed: UInt8 = ((chunk.length &- 1) << 5) | chunk.offset
+            let cmd = Data([
+                MWModule.logging.rawValue, 0x02,
+                MWModule.dataProcessor.rawValue, 0x03, handle.id,
+                packed
+            ])
+            let response = try await proto.writeAndAwaitNotification(
+                command: cmd, awaitModule: .logging, awaitRegister: 0x02
+            )
+            guard response.count >= 3 else {
+                throw MWError.operationFailed("Logger subscription returned short response")
+            }
+            chunks.append((id: response[2], byteCount: Int(chunk.length)))
+        }
+        loggerRegistry[key] = chunks
+
+        // Enable circular buffer and start logging.
+        try await proto.write(MWPacket.command(.logging, 0x0B, [0x01]))
+        try await proto.write(MWPacket.command(.logging, 0x01, [0x01]))
+
+        } catch {
+            // Roll back — the session never started (guard above ensures the
+            // prior state was `.idle`). Board-side loggers subscribed before
+            // the failure are orphaned; `clearLog()` reclaims them.
+            loggerRegistry.removeValue(forKey: key)
+            state = .idle
+            throw error
+        }
+    }
+
+    /// Stop logging for a processor-handle registration.
+    ///
+    /// Disables the global logging module (mirrors `stopLogging<L>(_:)`) but
+    /// does not touch any source-sensor lifecycle — the caller is responsible
+    /// for stopping the source sensors that feed the processor chain.
+    ///
+    /// The logger registration under `key` is left in `loggerRegistry` so that
+    /// `downloadLogs(key:decode:)` can still find the chunk IDs. Use
+    /// `clearLog()` (which wipes the registry) once the download is complete.
+    public func stopLogging(key: String) async throws {
+        mwLog("[Device] stopLogging(processor): key=\(key)")
+        guard case .logging = state else { return }
+        guard loggerRegistry[key] != nil else {
+            throw MWError.invalidState("No logger registered for key '\(key)'")
+        }
+        try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))
+        state = .idle
+    }
+
+    /// Download and decode log entries for a processor-handle registration.
+    ///
+    /// Requires that `startLogging(_:key:)` was called with the same `key`
+    /// (in this session, or in a previous one if the registry was rebuilt via
+    /// `recoverLoggers`). The user-supplied `decode` closure runs on the
+    /// reassembled chunk bytes — i.e. for a 16-byte euler signal the closure
+    /// receives all 16 bytes in chunk order.
+    ///
+    /// - Parameters:
+    ///   - key:    The same string passed to `startLogging(_:key:)`.
+    ///   - decode: A pure decoder run against the reassembled per-sample bytes.
+    ///             For built-in fusion signals, prepend a fake [module, register]
+    ///             header and call the matching `MWPacketParser` method (see
+    ///             `MWLoggable`'s default `parseLogSample`).
+    public func downloadLogs<S: Sendable>(
+        key: String,
+        decode: @Sendable @escaping (Data) throws -> S
+    ) async throws -> AsyncThrowingStream<Download<[MWLoggedSample<S>]>, Error> {
+        guard let chunks = loggerRegistry[key] else {
+            throw MWError.invalidState("No logger registered for '\(key)'. Call startLogging(_:key:) first.")
+        }
+
+        let rawStream = try await downloadLogs()
+        let (typed, cont) = AsyncThrowingStream<Download<[MWLoggedSample<S>]>, Error>.makeStream()
+
+        let decodingTask = Task {
+            do {
+                for try await progress in rawStream {
+                    let decoded = try decodeEntries(progress.data, chunks: chunks, decode: decode)
+                    cont.yield(Download(data: decoded, percentComplete: progress.percentComplete, totalEntries: progress.totalEntries, entriesDownloaded: progress.entriesDownloaded))
+                }
+                cont.finish()
+            } catch {
+                cont.finish(throwing: error)
+            }
+        }
+        cont.onTermination = { _ in decodingTask.cancel() }
         return typed
     }
 
     /// Clear all log entries from the device flash and remove all logger subscriptions.
+    ///
+    /// Stops logging first (`[0x0B, 0x01, 0x00]`) because the firmware
+    /// ignores `CLEAR_ENTRIES` (`[0x0B, 0x09, …]`) and `REMOVE_ALL_LOGGERS`
+    /// (`[0x0B, 0x0A]`) while sampling is enabled — silently, without an
+    /// error. This matters for the orphan-log discard flow where the
+    /// board can still be actively logging at the moment we call this.
+    /// Mirrors steps 1–3 of `factoryReset()`.
     public func clearLog() async throws {
         guard case .idle = state else {
             throw MWError.invalidState("Device must be idle to clear the log")
         }
+        try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))           // stop logging
         try await proto.write(MWPacket.command(.logging, 0x09, [0xFF, 0xFF, 0xFF, 0xFF]))
-        // Remove all loggers from the board
-        try await proto.write(MWPacket.command(.logging, 0x0A, []))
+        try await proto.write(MWPacket.command(.logging, 0x0A, []))               // remove all loggers
         loggerRegistry.removeAll()
     }
 
@@ -319,9 +898,11 @@ public actor MetaWearDevice {
     /// Swift side no-ops when the logging module revision is below 3
     /// (`MMS_REVISION` in the C++ SDK). Safe to call on any device.
     ///
-    /// Typical use: call immediately after `stopLogging(_:)` and before
-    /// `downloadLogs()` to ensure the final page of samples isn't stranded in
-    /// RAM.
+    /// **You almost never need to call this directly.** `downloadLogs()` (and
+    /// every overload built on it) auto-flushes before reading `LOG_LENGTH`, so
+    /// the standard `startLogging → stop → download` flow works without it.
+    /// The remaining use case is a non-download read of `MWLogLength()` mid-
+    /// session where you want the count to include the in-RAM partial page.
     ///
     /// Wire format: `[0x0B, 0x10, 0x01]`.
     ///
@@ -347,18 +928,21 @@ public actor MetaWearDevice {
                 // READ request for TRIGGER register: [0x0B, 0x82, logger_id]
                 let cmd = Data([MWModule.logging.rawValue, 0x82, id])
                 let response = try await proto.writeAndRead(command: cmd, awaitModule: .logging, awaitRegister: 0x02)
-                // Response: [0x0B, 0x82, logger_id, module_id, register_id, channel, packed_byte]
-                guard response.count >= 7 else { break }
-                let loggerID = response[2]
-                guard loggerID != 0xFF else { break }
-                guard let module = MWModule(rawValue: response[3]) else { continue }
-                let reg      = response[4]
-                let channel  = response[5]
-                let packed   = response[6]
+                // Response: [0x0B, 0x82, source_module, source_register, source_data_id, packed_byte]
+                // The firmware does NOT echo the logger_id back — the queried `id`
+                // IS the logger ID. An empty slot is signalled by a short response
+                // or a sentinel 0xFF in the source-module byte.
+                guard response.count >= 6 else { break }
+                let sourceModuleByte = response[2]
+                guard sourceModuleByte != 0xFF else { break }
+                guard let module = MWModule(rawValue: sourceModuleByte) else { continue }
+                let reg      = response[3]
+                let channel  = response[4]
+                let packed   = response[5]
                 // Low 5 bits = offset, high 3 bits = length-1.
                 let offset   = packed & 0x1F
                 let length   = ((packed >> 5) & 0x7) + 1
-                result.append(ActiveLogger(loggerID: loggerID, module: module,
+                result.append(ActiveLogger(loggerID: id, module: module,
                                            register: reg, channel: channel,
                                            chunkOffset: offset, chunkLength: length))
             } catch MWError.timeout {
@@ -374,8 +958,9 @@ public actor MetaWearDevice {
     /// Returns one entry per processor ID in the order the board reports them.
     /// Used to reconstruct the processor graph behind an anonymous (replayed) signal.
     ///
-    /// Response layout (mirrors the logging ADD echo):
-    /// `[0x09, 0x82, id_echo, parent_module, parent_register, parent_proc_id_or_0xFF, packed, proc_type, config...]`
+    /// Response layout (firmware does NOT echo the processor_id):
+    /// `[0x09, 0x82, parent_module, parent_register, parent_proc_id_or_0xFF, packed, proc_type, config...]`
+    /// The queried `id` IS the processor ID.
     public func queryActiveProcessors() async throws -> [ActiveProcessor] {
         var result: [ActiveProcessor] = []
         for id: UInt8 in 0..<32 {
@@ -384,22 +969,22 @@ public actor MetaWearDevice {
                 let response = try await proto.writeAndRead(
                     command: cmd, awaitModule: .dataProcessor, awaitRegister: 0x02
                 )
-                // Need at least: header(3) + parent_mod + parent_reg + parent_proc_id + packed + proc_type
-                guard response.count >= 8 else { break }
-                let idEcho = response[2]
-                guard idEcho != 0xFF else { break }
-                guard let parentMod = MWModule(rawValue: response[3]) else { continue }
-                let parentReg = response[4]
-                let parentProcID = response[5]
-                let packed = response[6]
+                // Need at least: header(2) + parent_mod + parent_reg + parent_proc_id + packed + proc_type
+                guard response.count >= 7 else { break }
+                let parentModByte = response[2]
+                guard parentModByte != 0xFF else { break }
+                guard let parentMod = MWModule(rawValue: parentModByte) else { continue }
+                let parentReg = response[3]
+                let parentProcID = response[4]
+                let packed = response[5]
                 let offset = packed & 0x1F
                 let length = (packed >> 5) + 1
-                let procType = response[7]
-                let configBytes: [UInt8] = response.count > 8
-                    ? Array(response[response.index(response.startIndex, offsetBy: 8)...])
+                let procType = response[6]
+                let configBytes: [UInt8] = response.count > 7
+                    ? Array(response[response.index(response.startIndex, offsetBy: 7)...])
                     : []
                 result.append(ActiveProcessor(
-                    processorID: idEcho,
+                    processorID: id,
                     parentModule: parentMod,
                     parentRegister: parentReg,
                     parentProcessorID: parentProcID,
@@ -446,7 +1031,10 @@ public actor MetaWearDevice {
         var scales = MWAnonymousSignalBuilder.Scales(accel: nil, gyro: nil, mag: 16.0)
 
         // Accelerometer range — query 0x83 on accel module. Response: [0x03, 0x83, odr, range_byte].
-        if modules[.accelerometer]?.isPresent == true {
+        // The range byte encoding differs between BMI160 and BMI270 (and the
+        // 0x03 value collides — ±2g on BMI160 vs ±16g on BMI270), so pass the
+        // implementation byte through so the scale lookup can pick the right table.
+        if let accInfo = modules[.accelerometer], accInfo.isPresent {
             do {
                 let resp = try await proto.writeAndRead(
                     command: Data([MWModule.accelerometer.rawValue, 0x83]),
@@ -454,7 +1042,7 @@ public actor MetaWearDevice {
                     awaitRegister: 0x03
                 )
                 if resp.count >= 4 {
-                    scales.accel = Self.accelScaleFromRangeByte(resp[3])
+                    scales.accel = Self.accelScaleFromRangeByte(resp[3], implementation: accInfo.implementation)
                 }
             } catch MWError.timeout {
                 // Leave as nil
@@ -480,15 +1068,30 @@ public actor MetaWearDevice {
         return scales
     }
 
-    /// Map the BMI160 accelerometer range byte (0x03, 0x05, 0x08, 0x0C) or the
-    /// BMI270 range byte (0x00..0x03) to LSB/g.
-    private static func accelScaleFromRangeByte(_ b: UInt8) -> Float {
-        switch b {
-        case 0x03, 0x00: return 16384  // ±2g
-        case 0x05, 0x01: return 8192   // ±4g
-        case 0x08, 0x02: return 4096   // ±8g
-        case 0x0C, 0x03: return 2048   // ±16g
-        default:         return 16384
+    /// Map the live accelerometer range byte to LSB/g.
+    ///
+    /// BMI160 and BMI270 encode the range byte differently and both encodings
+    /// share the value `0x03` (±2g on BMI160, ±16g on BMI270). The chip is
+    /// identified by `implementation`, drawn from the accelerometer module's
+    /// discovery info — `1` = BMI160, `4` = BMI270.
+    private static func accelScaleFromRangeByte(_ b: UInt8, implementation: UInt8) -> Float {
+        switch implementation {
+        case 4:  // BMI270 — range byte is 0-based: 0x00=±2g, 0x01=±4g, 0x02=±8g, 0x03=±16g
+            switch b {
+            case 0x00: return 16384  // ±2g
+            case 0x01: return 8192   // ±4g
+            case 0x02: return 4096   // ±8g
+            case 0x03: return 2048   // ±16g
+            default:   return 16384
+            }
+        default: // BMI160 (impl 1) and anything unknown — fall through to BMI160 table
+            switch b {
+            case 0x03: return 16384  // ±2g
+            case 0x05: return 8192   // ±4g
+            case 0x08: return 4096   // ±8g
+            case 0x0C: return 2048   // ±16g
+            default:   return 16384
+            }
         }
     }
 
@@ -514,7 +1117,7 @@ public actor MetaWearDevice {
             .sorted { $0.loggerID < $1.loggerID }
         guard !matched.isEmpty else {
             throw MWError.operationFailed(
-                "No active logger found for '\(loggable.loggerKey)' on \(loggable.module)/\(loggable.dataRegister)"
+                "No active logger found for '\(loggable.loggerKey)' on \(loggable.module.name)/\(loggable.dataRegister)"
             )
         }
         let chunks: [(id: UInt8, byteCount: Int)] = zip(matched, loggable.logDataChunks).map {
@@ -523,17 +1126,37 @@ public actor MetaWearDevice {
         loggerRegistry[loggable.loggerKey] = chunks
     }
 
+    /// How long a download may go without any BLE activity (raw entries,
+    /// page-completed notices, or progress updates) before it is aborted
+    /// with `MWError.timeout`. Without this, a firmware that stops sending
+    /// progress (drained battery, radio glitch) leaves `downloadLogs()`
+    /// suspended forever.
+    static let downloadInactivityTimeout: Duration = .seconds(60)
+
     private func runDownload(
         rawStream: AsyncThrowingStream<Data, Error>,
         progressStream: AsyncThrowingStream<Data, Error>,
         pageStream: AsyncThrowingStream<Data, Error>,
+        totalEntries: UInt32,
         continuation: AsyncThrowingStream<Download<[RawLogEntry]>, Error>.Continuation
     ) async {
         let accumulator = LogEntryAccumulator()
+        let activity = DownloadActivityMonitor()
+
+        // Yield an initial 0% snapshot so callers see the total entry
+        // count immediately — useful for UIs that want to render
+        // "0 of N entries" before the first firmware progress notification
+        // arrives. (Long downloads can wait several seconds for that
+        // first page-complete notice, which would otherwise leave the
+        // progress bar at 0% with no context.)
+        continuation.yield(Download(data: [], percentComplete: 0.0,
+                                    totalEntries: totalEntries,
+                                    entriesDownloaded: 0))
 
         // Drain raw-entry notifications in the background
         let entryTask = Task {
             for try await packet in rawStream {
+                await activity.bump()
                 for entry in (try? RawLogEntry.parseAll(from: packet)) ?? [] {
                     await accumulator.append(entry)
                 }
@@ -544,19 +1167,85 @@ public actor MetaWearDevice {
         let pageTask = Task { [weak self] in
             guard let self else { return }
             for try await _ in pageStream {
+                await activity.bump()
                 try? await self.proto.write(MWPacket.command(.logging, 0x0E, []))
             }
         }
 
+        // Inactivity watchdog. When the board goes silent on all three
+        // channels for `downloadInactivityTimeout`, unsubscribe the logging
+        // registers — that finishes the streams cleanly, the progress loop
+        // below falls through, and the fall-through path surfaces
+        // `MWError.timeout` to the consumer.
+        let watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try await Task.sleep(for: .seconds(5))
+                if await activity.idleDuration() > Self.downloadInactivityTimeout {
+                    mwLog("[Device] download watchdog: no activity for \(Self.downloadInactivityTimeout) — aborting")
+                    guard let self else { return }
+                    await self.proto.unsubscribe(from: .logging, register: 0x07)
+                    await self.proto.unsubscribe(from: .logging, register: 0x08)
+                    await self.proto.unsubscribe(from: .logging, register: 0x0D)
+                    return
+                }
+            }
+        }
+        defer { watchdog.cancel() }
+
         do {
             for try await packet in progressStream {
-                guard packet.count >= 10 else { continue }
+                await activity.bump()
+                // Firmware sends only [0x0B, 0x08, remaining(LE32)] — 6 bytes total.
+                // Older drafts of the SDK assumed an 8-byte payload that included
+                // `total`, but the C++ SDK actually caches `total` from the
+                // earlier read of register 0x05 (see `logging_response_readout_progress`
+                // in metawear/core/cpp/logging.cpp — `memcpy(&entries_left, response + 2,
+                // min(len - 2, 4))`). We pass `totalEntries` in via the call site for
+                // the same reason.
+                guard packet.count >= 6 else { continue }
                 let remaining = MWPacketParser.parseUInt32LE(packet, offset: 2)
-                let total     = MWPacketParser.parseUInt32LE(packet, offset: 6)
-                let percent   = total > 0 ? Double(total - remaining) / Double(total) : 1.0
+                let downloaded = totalEntries - min(remaining, totalEntries)
+                let percent: Double = totalEntries > 0
+                    ? Double(downloaded) / Double(totalEntries)
+                    : 1.0
                 let snapshot  = await accumulator.all()
-                continuation.yield(Download(data: snapshot, percentComplete: percent))
+                continuation.yield(Download(data: snapshot, percentComplete: percent,
+                                            totalEntries: totalEntries,
+                                            entriesDownloaded: downloaded))
                 if remaining == 0 {
+                    // The firmware can deliver the trailing `0x07` raw-entry
+                    // packets in the same radio window as the final `0x08`
+                    // progress notice. The `entryTask` runs concurrently
+                    // (unstructured `Task { ... }` on the global executor)
+                    // and may not have drained its buffered packets by the
+                    // time we observe `remaining == 0` here. Poll the
+                    // accumulator until it reaches the entry count we
+                    // cached from the earlier read of register 0x05, or
+                    // until progress has been stable for a short window
+                    // (in case the firmware sent fewer entries than the
+                    // cached total — better an incomplete download than a
+                    // 2-second tail on every successful run).
+                    let hardDeadline = ContinuousClock.now + .seconds(2)
+                    let target       = Int(totalEntries)
+                    var lastCount    = snapshot.count
+                    var stableSince  = ContinuousClock.now
+                    while await accumulator.all().count < target,
+                          ContinuousClock.now < hardDeadline {
+                        try? await Task.sleep(for: .milliseconds(20))
+                        let now = await accumulator.all().count
+                        if now != lastCount {
+                            lastCount   = now
+                            stableSince = ContinuousClock.now
+                        } else if ContinuousClock.now - stableSince > .milliseconds(300) {
+                            break
+                        }
+                    }
+                    let finalSnapshot = await accumulator.all()
+                    if finalSnapshot.count > snapshot.count {
+                        continuation.yield(Download(data: finalSnapshot, percentComplete: 1.0,
+                                                    totalEntries: totalEntries,
+                                                    entriesDownloaded: totalEntries))
+                    }
                     entryTask.cancel()
                     pageTask.cancel()
                     state = .idle
@@ -564,6 +1253,14 @@ public actor MetaWearDevice {
                     return
                 }
             }
+            // The progress stream finished without `remaining == 0` — the
+            // inactivity watchdog unsubscribed the logging channels (or
+            // something else tore the subscription down). Either way the
+            // readout never completed; surface a timeout.
+            entryTask.cancel()
+            pageTask.cancel()
+            state = .idle
+            continuation.finish(throwing: MWError.timeout)
         } catch {
             entryTask.cancel()
             pageTask.cancel()
@@ -574,31 +1271,117 @@ public actor MetaWearDevice {
 
     // MARK: - Log reassembly
 
+    /// Decode an already-downloaded set of raw log entries into typed samples
+    /// for one loggable, using the chunk layout registered for it.
+    ///
+    /// Use this when you have *multiple* active loggers and want to download
+    /// them all in one pass: call `downloadLogs()` (no args) once to drain
+    /// the board's circular log, accumulate the raw entries, then call this
+    /// once per loggable to extract its samples. Calling `downloadLogs(_:)`
+    /// per loggable instead would re-trigger the readout each time and the
+    /// second call would see `LOG_LENGTH == 0` (the first readout drained
+    /// the log).
+    ///
+    /// - Throws: `MWError.invalidState` if no logger is registered for
+    ///   `loggable.loggerKey` — call `startLogging(_:)` (live in the same
+    ///   session) or `recoverLoggers(for:)` (across app restart) first.
+    public func decodeEntries<L: MWLoggable>(
+        _ entries: [RawLogEntry],
+        for loggable: L
+    ) throws -> [MWLoggedSample<L.Sample>] {
+        guard let chunks = loggerRegistry[loggable.loggerKey] else {
+            throw MWError.invalidState(
+                "No logger registered for '\(loggable.loggerKey)'. Call startLogging(_:) or recoverLoggers(for:) first."
+            )
+        }
+        return try decodeEntries(entries, chunks: chunks, loggable: loggable)
+    }
+
+    /// Decode an already-downloaded set of raw log entries into typed samples
+    /// for one polled-readable logger. Same multi-logger rationale as the
+    /// `MWLoggable` overload — issue a single raw `downloadLogs()` to drain
+    /// the board, then call this per polled logger to extract its samples.
+    public func decodeEntries<R: MWPolledLoggable>(
+        _ entries: [RawLogEntry],
+        for logger: MWPolledLogger<R>
+    ) throws -> [MWLoggedSample<R.Sample>] {
+        guard let chunks = loggerRegistry[logger.loggerKey] else {
+            throw MWError.invalidState(
+                "No logger registered for '\(logger.loggerKey)'. Call startLogging(_:) or recoverLoggers(for:) first."
+            )
+        }
+        let readable = logger.readable
+        return try decodeEntries(entries, chunks: chunks, decode: { data in
+            try readable.parseLogSample(from: data)
+        })
+    }
+
+    /// Decode an already-downloaded set of raw log entries against an
+    /// `MWAnonymousSignal` reconstructed via `createAnonymousDataSignals()`.
+    ///
+    /// Used for the "another app / a previous install configured these
+    /// loggers" workflow: the board's logger registry is intact but we
+    /// don't have a matching `MWLoggable` on this side. The anonymous
+    /// signal carries the logger IDs + per-chunk byte counts + a decode
+    /// closure, so reassembly works without any `loggerRegistry` entry.
+    public func decodeEntries(
+        _ entries: [RawLogEntry],
+        for signal: MWAnonymousSignal
+    ) throws -> [MWLoggedSample<[MWAnonymousSignal.Output]>] {
+        let chunks: [(id: UInt8, byteCount: Int)] = signal.chunks.map {
+            (id: $0.id, byteCount: $0.byteCount)
+        }
+        return try decodeEntries(entries, chunks: chunks, decode: { data in
+            try signal.decode(data)
+        })
+    }
+
     private func decodeEntries<L: MWLoggable>(
         _ entries: [RawLogEntry],
         chunks: [(id: UInt8, byteCount: Int)],
         loggable: L
     ) throws -> [MWLoggedSample<L.Sample>] {
-        let byKey = Dictionary(grouping: entries) { LogEntryKey(resetUID: $0.resetUID, tick: $0.tick) }
-        let ref = logReferenceDate
+        try decodeEntries(entries, chunks: chunks) { try loggable.parseLogSample(from: $0) }
+    }
 
-        var result: [MWLoggedSample<L.Sample>] = []
-        for (key, group) in byKey {
-            let byID: [UInt8: RawLogEntry] = Dictionary(
-                group.map { ($0.id, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
+    /// Chunk-reassembly core shared by every `decodeEntries`/`downloadLogs` overload.
+    ///
+    /// Chunks are paired by **per-logger-ID arrival order**, mirroring the C++
+    /// SDK (`process_log_data` queues entries per logger ID and pops one from
+    /// each queue to form a sample). An earlier draft grouped entries by
+    /// identical `(resetUID, tick)` instead — that breaks above ~683 Hz, where
+    /// one tick (≈1.465 ms) spans more than one sample and distinct samples
+    /// collapse into the same group and get dropped.
+    ///
+    /// The sample timestamp is taken from the first chunk's entry. A trailing
+    /// sample whose later chunks were cut off by the end of the download is
+    /// dropped, matching the old behaviour for incomplete groups.
+    private func decodeEntries<S: Sendable>(
+        _ entries: [RawLogEntry],
+        chunks: [(id: UInt8, byteCount: Int)],
+        decode: @Sendable (Data) throws -> S
+    ) throws -> [MWLoggedSample<S>] {
+        let chunkIDs = chunks.map(\.id)
+        var queues: [UInt8: [RawLogEntry]] = [:]
+        for entry in entries where chunkIDs.contains(entry.id) {
+            queues[entry.id, default: []].append(entry)
+        }
+        let sampleCount = chunkIDs.map { queues[$0]?.count ?? 0 }.min() ?? 0
+        guard sampleCount > 0, let firstQueue = queues[chunkIDs[0]] else { return [] }
+
+        let ref = logReferenceDate
+        var result: [MWLoggedSample<S>] = []
+        result.reserveCapacity(sampleCount)
+        for i in 0..<sampleCount {
             var assembled = Data()
-            var complete = true
             for chunk in chunks {
-                guard let entry = byID[chunk.id] else { complete = false; break }
+                let entry = queues[chunk.id]![i]
                 var raw = entry.rawData.littleEndian
                 let bytes = withUnsafeBytes(of: &raw) { Data($0.prefix(chunk.byteCount)) }
                 assembled.append(bytes)
             }
-            guard complete else { continue }
-            let sample = try loggable.parseLogSample(from: assembled)
-            let msElapsed = Double(key.tick) * MWPacketParser.msPerTick
+            let sample = try decode(assembled)
+            let msElapsed = Double(firstQueue[i].tick) * MWPacketParser.msPerTick
             let date: Date
             if let ref {
                 date = Date(timeInterval: msElapsed / 1000.0, since: ref)
@@ -621,6 +1404,15 @@ public actor MetaWearDevice {
     public func readTemperature(channel: UInt8 = 0) async throws -> Float {
         let packet = try await proto.read(.temperature, 0x01, channel)
         return try MWPacketParser.parseTemperature(packet)
+    }
+
+    /// Read the active connection's RSSI (in dBm) as observed by the central.
+    /// Requires an established connection. Higher (less-negative) values mean
+    /// a stronger received signal — e.g. raising the board's TX power via
+    /// `MWSettings.SetTXPower(.plus4)` should produce a higher RSSI than
+    /// `.zero` at the same distance.
+    public func readRSSI() async throws -> Int {
+        try await transport.readRSSI()
     }
 
     /// Read the current sensor fusion calibration state.
@@ -839,14 +1631,10 @@ public actor MetaWearDevice {
 
     // MARK: - Disconnect handling
 
-    private func hookDisconnectCallback() {
-        let device = self
-        Task {
-            await device.proto.setDisconnectHandler { error in
-                Task {
-                    await device.handleUnexpectedDisconnect(error: error)
-                }
-            }
+    private func hookDisconnectCallback() async {
+        await proto.setDisconnectHandler { [weak self] error in
+            guard let self else { return }
+            Task { await self.handleUnexpectedDisconnect(error: error) }
         }
     }
 
@@ -867,7 +1655,7 @@ public actor MetaWearDevice {
     /// Rule: sensor fusion and individual IMU sensors (accel/gyro/mag) are mutually exclusive.
     private func checkSensorConflict(adding module: MWModule) throws {
         if activeStreamModules.contains(module) {
-            throw MWError.invalidState("\(module) is already streaming")
+            throw MWError.invalidState("\(module.name) is already streaming")
         }
         let imuModules: Set<MWModule> = [.accelerometer, .gyro, .magnetometer]
         let addingFusion = module == .sensorFusion
@@ -881,7 +1669,7 @@ public actor MetaWearDevice {
         }
         if addingIMU && activeStreamModules.contains(.sensorFusion) {
             throw MWError.invalidState(
-                "Cannot stream \(module) while sensor fusion is active"
+                "Cannot stream \(module.name) while sensor fusion is active"
             )
         }
     }
@@ -894,6 +1682,14 @@ extension MetaWearDevice {
     func _logReferenceDate() -> Date? { logReferenceDate }
     /// Returns true if loggerRegistry contains an entry for the given key.
     func _loggerRegistryHasKey(_ key: String) -> Bool { loggerRegistry[key] != nil }
+    /// Exposes the chunk-reassembly core for unit tests (no registry required).
+    func _decodeEntries<S: Sendable>(
+        _ entries: [RawLogEntry],
+        chunks: [(id: UInt8, byteCount: Int)],
+        decode: @Sendable (Data) throws -> S
+    ) throws -> [MWLoggedSample<S>] {
+        try decodeEntries(entries, chunks: chunks, decode: decode)
+    }
 }
 
 // MARK: - Raw log entry
@@ -915,9 +1711,11 @@ public struct RawLogEntry: Sendable {
 
     /// Parse all log entries from a single BLE notification packet (1 or 2 entries per packet).
     public static func parseAll(from notification: Data) throws -> [RawLogEntry] {
-        // Entry layout: 1 byte id/resetUID + 3 byte tick + 4 byte data = 8 bytes
+        // Entry layout: 1 byte id/resetUID + 4 byte tick (LE) + 4 byte data = 9 bytes
+        // — see `MWPacketParser.parseLogEntry`. A paired BLE notification is
+        // therefore 2 (header) + 9 + 9 = 20 bytes; a single-entry one is 11.
         let headerLen = 2   // [module, register]
-        let entryLen  = 8
+        let entryLen  = 9
         var result: [RawLogEntry] = []
         if notification.count >= headerLen + entryLen {
             result.append(try RawLogEntry(entryBytes: notification.advanced(by: headerLen)))
@@ -937,10 +1735,14 @@ private actor LogEntryAccumulator {
     func all() -> [RawLogEntry] { entries }
 }
 
-// MARK: - Log entry grouping key
+// MARK: - Download activity monitor
 
-private struct LogEntryKey: Hashable {
-    let resetUID: UInt8
-    let tick: UInt32
+/// Tracks the time of the most recent BLE activity during a log download so
+/// the inactivity watchdog can distinguish "slow but alive" from "stalled".
+private actor DownloadActivityMonitor {
+    private var last = ContinuousClock.now
+    func bump() { last = ContinuousClock.now }
+    func idleDuration() -> Duration { ContinuousClock.now - last }
 }
+
 

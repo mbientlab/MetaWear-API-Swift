@@ -64,7 +64,8 @@ private func startLogging<L: MWLoggable>(
     let injector = Task {
         for id in loggerIDs {
             try? await Task.sleep(nanoseconds: 10_000_000)
-            await transport.inject(notification: Data([0x0B, 0x82, id]), to: MWUUIDs.notify)
+            // Logger subscribe response: plain notification, bit-7 clear.
+            await transport.inject(notification: Data([0x0B, 0x02, id]), to: MWUUIDs.notify)
         }
     }
     defer { injector.cancel() }
@@ -197,20 +198,25 @@ struct QueryActiveLoggersTests {
         let (device, transport) = try await connectedDevice()
 
         // Inject responses for two logger IDs, then a timeout for ID 2.
+        // Wire format (6 bytes): [0x0B, 0x82, src_module, src_register, src_data_id, packed].
+        // The firmware does NOT echo the queried logger_id back — that's why the
+        // SDK uses the loop's `id` as the loggerID. (Earlier versions of this
+        // fixture incorrectly included an echoed ID byte; the real hardware
+        // response is one byte shorter.)
         // Packed byte: low 5 bits = offset, high 3 bits = length-1.
         let responder = Task {
-            // Logger 0: module=accel(0x03), register=0x04, channel=0xFF,
+            // Logger 0: module=accel(0x03), register=0x04, data_id=0xFF,
             //           packed=0x60 (offset=0, length=4)
             try? await Task.sleep(nanoseconds: 5_000_000)
             await transport.inject(
-                notification: Data([0x0B, 0x82, 0x00, 0x03, 0x04, 0xFF, 0x60]),
+                notification: Data([0x0B, 0x82, 0x03, 0x04, 0xFF, 0x60]),
                 to: MWUUIDs.notify
             )
-            // Logger 1: module=accel(0x03), register=0x04, channel=0xFF,
+            // Logger 1: module=accel(0x03), register=0x04, data_id=0xFF,
             //           packed=0x24 (offset=4, length=2)
             try? await Task.sleep(nanoseconds: 5_000_000)
             await transport.inject(
-                notification: Data([0x0B, 0x82, 0x01, 0x03, 0x04, 0xFF, 0x24]),
+                notification: Data([0x0B, 0x82, 0x03, 0x04, 0xFF, 0x24]),
                 to: MWUUIDs.notify
             )
             // No response for logger 2 → timeout stops iteration
@@ -239,16 +245,16 @@ struct RecoverLoggersTests {
         // No registry initially
         #expect(!(await device.loggerRegistryHasKey(sensor.loggerKey)))
 
-        // Inject query responses
+        // Inject query responses (6-byte wire format — no logger_id echo)
         let responder = Task {
             try? await Task.sleep(nanoseconds: 5_000_000)
             await transport.inject(
-                notification: Data([0x0B, 0x82, 0x00, 0x03, 0x04, 0xFF, 0x03]),
+                notification: Data([0x0B, 0x82, 0x03, 0x04, 0xFF, 0x03]),
                 to: MWUUIDs.notify
             )
             try? await Task.sleep(nanoseconds: 5_000_000)
             await transport.inject(
-                notification: Data([0x0B, 0x82, 0x01, 0x03, 0x04, 0xFF, 0x81]),
+                notification: Data([0x0B, 0x82, 0x03, 0x04, 0xFF, 0x81]),
                 to: MWUUIDs.notify
             )
             // Let ID 2 time out
@@ -268,7 +274,7 @@ struct RecoverLoggersTests {
         let responder = Task {
             try? await Task.sleep(nanoseconds: 5_000_000)
             await transport.inject(
-                notification: Data([0x0B, 0x82, 0x00, 0x13, 0x05, 0xFF, 0x03]),  // gyro
+                notification: Data([0x0B, 0x82, 0x13, 0x05, 0xFF, 0x03]),  // gyro
                 to: MWUUIDs.notify
             )
             // ID 1 times out

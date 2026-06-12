@@ -14,12 +14,11 @@ struct AccelerometerTests {
     @Test @MainActor
     func bmi_set_odr_cmd_and_value() async throws {
         try await withConnectedDevice { device in
-            guard let sensor = await device.makeAccelerometer(odrHz: 55, rangeG: 2) else {
-                print("\n  Skipping — Bosch accelerometer not present\n"); return
-            }
-            
-            try await device.stream(sensor, usePacked: false)
-            
+            let sensor = try #require(await device.makeAccelerometer(odrHz: 55, rangeG: 2),
+                                      "Bosch accelerometer not present on this board")
+
+            try await device.startStream(sensor, usePacked: false)
+
             #expect(sensor.odrHz == 50.0,
                     "ODR set to 55 Hz should snap to 50.0 Hz, got \(sensor.odrHz)")
             
@@ -38,12 +37,11 @@ struct AccelerometerTests {
     @Test @MainActor
     func bmi_set_range_cmd_and_value() async throws {
         try await withConnectedDevice { device in
-            guard let sensor = await device.makeAccelerometer(odrHz: 100, rangeG: 14.75) else {
-                print("\n  Skipping — Bosch accelerometer not present\n"); return
-            }
-            
-            try await device.stream(sensor, usePacked: false)
-            
+            let sensor = try #require(await device.makeAccelerometer(odrHz: 100, rangeG: 14.75),
+                                      "Bosch accelerometer not present on this board")
+
+            try await device.startStream(sensor, usePacked: false)
+
             #expect(sensor.rangeG == 16.0,
                     "Range set to 14.75 g should snap to 16.0 g, got \(sensor.rangeG)")
             
@@ -55,23 +53,24 @@ struct AccelerometerTests {
     
     // MARK: - BMI: Subscribe to acceleration data
     //
-    // Calling device.stream() sends the subscribe command [0x03, 0x04, 0x01]
+    // Calling device.startStream() sends the subscribe command [0x03, 0x04, 0x01]
     // followed by enable [0x03, 0x02, 0x01, 0x00] and start [0x03, 0x01, 0x01].
     // This test verifies that data arrives after subscribing.
 
     @Test @MainActor
     func bmi_subscribe_acceleration_data() async throws {
         try await withConnectedDevice { device in
-            guard let sensor = await device.makeAccelerometer(odrHz: 100, rangeG: 14.75) else {
-                print("\n  Skipping — Bosch accelerometer not present\n"); return
-            }
+            let sensor = try #require(await device.makeAccelerometer(odrHz: 100, rangeG: 14.75),
+                                      "Bosch accelerometer not present on this board")
 
-            let stream = try await device.stream(sensor, usePacked: false)
+            let stream = try await device.startStream(sensor, usePacked: false)
 
             var samples: [CartesianFloat] = []
+            var count = 0
             let collector = Task {
                 for try await s in stream {
-                    print("\n  \(s.value)\n");
+                    count += 1
+                    print(formatSample(count, s.value, unit: "g"))
                     samples.append(s.value)
                 }
             }

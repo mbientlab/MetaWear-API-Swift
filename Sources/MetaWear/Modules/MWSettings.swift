@@ -61,18 +61,28 @@ public enum MWSettings {
 
     // MARK: - TX power
 
-    /// Set the BLE transmit power level.
+    /// BLE transmit power level. Raw value is the radio output in dBm
+    /// (signed) — passed verbatim to the firmware.
     public enum TXPower: Int8, Sendable, CaseIterable {
+        /// +4 dBm — maximum strength, shortest battery life.
         case plus4  =  4
+        /// 0 dBm — radio default.
         case zero   =  0
+        /// -4 dBm.
         case minus4 = -4
+        /// -8 dBm.
         case minus8 = -8
+        /// -12 dBm.
         case minus12 = -12
+        /// -16 dBm.
         case minus16 = -16
+        /// -20 dBm — long-range mode at the cost of throughput.
         case minus20 = -20
+        /// -40 dBm — proximity-only debug level.
         case minus40 = -40
     }
 
+    /// Set the BLE radio transmit power. Takes effect immediately.
     public struct SetTXPower: MWCommand, Sendable {
         public let power: TXPower
 
@@ -127,7 +137,8 @@ public enum MWSettings {
         }
     }
 
-    /// Tell the board to start advertising immediately.
+    /// Force the board to begin BLE advertising immediately, rather than
+    /// waiting for the next idle window.
     public struct StartAdvertising: MWCommand, Sendable {
         public init() {}
         public var commandData: Data { MWPacket.command(.settings, 0x05, []) }
@@ -185,6 +196,8 @@ public enum MWSettings {
     // [0x11, 0x08, 0x03, 0x03, 0xd8, 0xfe, 0x10, 0x16, 0xd8, 0xfe, 0x00, 0x12, 0x00, 0x6d, 0x62],
     // [0x11, 0x07, 0x69, 0x65, 0x6e, 0x74, 0x6c, 0x61, 0x62, 0x00]
     // ```
+    /// Program the BLE scan-response payload that the board returns to
+    /// scanners. May expand into multiple BLE writes — see `commands`.
     public struct SetScanResponse: MWCommandSequence {
         public let payload: [UInt8]
 
@@ -210,14 +223,26 @@ public enum MWSettings {
 
     // MARK: - Battery state (settings revision ≥ 3)
     //
-    // Register 0x0C (`BATTERY_STATE`) in `settings_register.h`. The C++
-    // `MblMwDataSignal` constructor auto-enables the silent bit for readable
-    // signals, so `datasignal_read(battery)` emits the composite signal as
-    // `[0x11, 0xCC]` (READ 0x80 | SILENT 0x40 | register 0x0C).
+    // Register 0x0C (`BATTERY_STATE`) in `settings_register.h`. Wire request:
+    // `[0x11, 0x8C]` (register 0x0C | READ 0x80). Response shape:
+    // `[0x11, 0x8C, charge, volt_lo, volt_hi]`.
     //
-    // Response shape: `[0x11, 0x8C, charge, volt_lo, volt_hi]`.
-    // Python reference (`test_settings.py::test_read_battery_state` / `test_battery_state_data`):
-    //   read cmd → `[0x11, 0xCC]`; parse `b'\x11\x8c\x63\x34\x10'` → BatteryState(voltage: 4148, charge: 99)
+    // The C++ `MblMwDataSignal` constructor enables the SILENT bit (0x40) on
+    // readable signals at construction, but the production read path in the
+    // Combine SDK calls `mbl_mw_datasignal_subscribe` *before*
+    // `mbl_mw_datasignal_read` (see `Combine/Read.swift::_read`), and
+    // `subscribe()` on a readable signal clears the silent bit (see
+    // `datasignal.cpp::subscribe`). So the actual wire byte that ships in
+    // production is `0x8C`, not `0xCC` — the `[0x11, 0xcc]` you see in
+    // `test_settings.py::test_read_battery_state` only appears because the
+    // unit test calls `datasignal_read` on a freshly-constructed signal
+    // without going through the subscribe-first wrapper.
+    //
+    // The MMS firmware we target (settings revision 10, fw 1.6.x) silently
+    // ignores `[0x11, 0xCC]` reads: no notification ever comes back, and the
+    // host times out. `[0x11, 0x8C]` produces the response immediately.
+    /// One-shot read of the battery charge percentage and voltage.
+    /// Requires settings module revision ≥ 3.
     public struct ReadBatteryState: MWReadable {
         public typealias Sample = BatteryState
 
@@ -227,10 +252,7 @@ public enum MWSettings {
         public let dataRegister: UInt8 = 0x0C
         public let packedDataRegister: UInt8? = nil
 
-        public var readCommand: Data {
-            // Matches C++ silent-readable emission (register 0x0C | READ | SILENT).
-            Data([MWModule.settings.rawValue, 0xCC])
-        }
+        public var readCommand: Data { MWPacket.read(.settings, 0x0C) }
 
         public func parseSample(from packet: Data) throws -> BatteryState {
             try MWPacketParser.parseBatteryState(packet)
@@ -248,6 +270,9 @@ public enum MWSettings {
     //
     // Python reference (`test_settings.py::test_mac_address`): packet
     // `[0x11, 0x8b, 0x01, 0x07, 0x7b, 0x52, 0x8f, 0xc9, 0xe8]` → `"E8:C9:8F:52:7B:07"`.
+    /// One-shot read of the board's BLE MAC address, formatted as a
+    /// canonical colon-separated string (e.g. `"E8:C9:8F:52:7B:07"`).
+    /// Requires settings module revision ≥ 2.
     public struct ReadMacAddress: MWReadable {
         public typealias Sample = String
 
@@ -337,6 +362,8 @@ public enum MWSettings {
         case scanAndConnectionRequests     = 3
     }
 
+    /// Configure how the board's whitelist restricts incoming BLE traffic.
+    /// Requires settings module revision ≥ 6.
     public struct SetWhitelistFilterMode: MWCommand, Sendable {
         public let mode: WhitelistFilterMode
 
@@ -361,7 +388,9 @@ public enum MWSettings {
     public struct BluetoothAddress: Sendable, Equatable {
         /// BLE address type (`MblMwBtleAddress.address_type`).
         public enum AddressType: UInt8, Sendable, CaseIterable {
+            /// Globally unique public address assigned by the manufacturer.
             case `public` = 0
+            /// Random/resolvable address (Bluetooth privacy feature).
             case random  = 1
         }
 
@@ -428,6 +457,8 @@ public enum MWSettings {
     //
     // Register 0x1C (`THREE_VOLT_POWER`). Mirrors C++
     // `mbl_mw_settings_enable_3V_regulator`. Silently ignored by non-MMS boards.
+    /// Enable or disable the 3.3 V regulator on MetaMotion S.
+    /// No-op on non-MMS boards. Requires settings module revision ≥ 9.
     public struct SetThreeVoltPower: MWCommand, Sendable {
         public let enabled: Bool
 
@@ -443,6 +474,9 @@ public enum MWSettings {
     // Register 0x1D (`FORCE_1M_PHY`). Mirrors C++ `mbl_mw_settings_force_1M_phy`.
     // When enabled the board pins its PHY to 1 Mbps — useful for diagnosing
     // 2 M PHY interoperability issues on MetaMotion S. No-op on older firmware.
+    /// Force the BLE radio to use the 1 Mbps PHY. Useful when debugging
+    /// 2 M PHY interoperability on MetaMotion S. Requires settings module
+    /// revision ≥ 10; no-op on older firmware.
     public struct SetForce1MPhy: MWCommand, Sendable {
         public let enabled: Bool
 

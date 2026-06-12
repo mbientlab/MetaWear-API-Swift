@@ -203,17 +203,44 @@ struct LogEntryParsingTests {
 
     @Test func parsesIdAndResetUID() throws {
         // Byte 0 = 0x63 = 0b01100011 → id = 0x03, resetUID = 0x03
-        let bytes: [UInt8] = [0x63, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        // 9-byte entry: [id_resetUID, tick(4 LE), data(4 LE)]
+        let bytes: [UInt8] = [0x63, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
         let (id, resetUID, _, _) = try MWPacketParser.parseLogEntry(Data(bytes))
         #expect(id == 3)
         #expect(resetUID == 3)
     }
 
     @Test func parsesTick() throws {
-        // tick = 0x012345 = 74565 (24-bit LE), bytes [1..3] = [0x45, 0x23, 0x01]
-        let bytes: [UInt8] = [0x00, 0x45, 0x23, 0x01, 0x00, 0x00, 0x00, 0x00]
+        // tick = 0x01234567 = 19,088,743 (32-bit LE) → bytes [1..4] = [0x67, 0x45, 0x23, 0x01]
+        let bytes: [UInt8] = [0x00, 0x67, 0x45, 0x23, 0x01, 0x00, 0x00, 0x00, 0x00]
         let (_, _, tick, _) = try MWPacketParser.parseLogEntry(Data(bytes))
-        #expect(tick == 74565)
+        #expect(tick == 0x01234567)
+    }
+
+    @Test func parsesFullTickRange() throws {
+        // Hardware-observed tick from a 1 Hz throttled euler download:
+        // bytes [0x53, 0x9F, 0x3B, 0x00] LE = 0x003B9F53 = 3,907,923 ticks.
+        let bytes: [UInt8] = [0xC0, 0x53, 0x9F, 0x3B, 0x00, 0xA4, 0xFD, 0xB3, 0x43]
+        let (id, resetUID, tick, rawData) = try MWPacketParser.parseLogEntry(Data(bytes))
+        #expect(id == 0x00)               // 0xC0 & 0x1F
+        #expect(resetUID == 0x06)         // (0xC0 >> 5) & 0x07
+        #expect(tick == 0x003B_9F53)
+        #expect(rawData == 0x43B3_FDA4)
+    }
+
+    @Test func parsesData() throws {
+        // data = 0xDEADBEEF (32-bit LE) → bytes [5..8] = [0xEF, 0xBE, 0xAD, 0xDE]
+        let bytes: [UInt8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0xEF, 0xBE, 0xAD, 0xDE]
+        let (_, _, _, rawData) = try MWPacketParser.parseLogEntry(Data(bytes))
+        #expect(rawData == 0xDEAD_BEEF)
+    }
+
+    @Test func rejectsShortPacket() {
+        // 8 bytes is shorter than the 9-byte entry — must throw.
+        let bytes: [UInt8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        #expect(throws: MWError.self) {
+            _ = try MWPacketParser.parseLogEntry(Data(bytes))
+        }
     }
 
     @Test func msPerTickIsCorrect() {

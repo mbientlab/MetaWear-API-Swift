@@ -45,8 +45,10 @@ private func recordMacro(
 ) async throws -> MWMacro {
     let injector = Task {
         try? await Task.sleep(nanoseconds: 5_000_000)
-        // Response to BEGIN: [0x0F, 0x82, macro_id]
-        await transport.inject(notification: Data([0x0F, 0x82, boardMacroID]), to: MWUUIDs.notify)
+        // Response to BEGIN: [0x0F, 0x02, macro_id] — plain notification
+        // (high bit clear), NOT a read response. Mirror real firmware so the
+        // SDK's notify-side awaiter resumes correctly.
+        await transport.inject(notification: Data([0x0F, 0x02, boardMacroID]), to: MWUUIDs.notify)
     }
     defer { injector.cancel() }
     return try await device.recordMacro(executeOnBoot: executeOnBoot, commands: commands)

@@ -17,6 +17,10 @@ public struct MWSessionSnapshot: Sendable, Identifiable {
     public let deviceSerial: String
     public let deviceModel: String
     public let deviceFirmware: String
+    /// User-facing sensor + settings string, e.g. "Gyroscope · ±2000 dps ·
+    /// 25 Hz". Nil for older records persisted before the field existed —
+    /// callers should fall back to `sensorKind` when nil.
+    public let label: String?
 
     init(record: MWSessionRecord) {
         self.id             = record.id
@@ -28,5 +32,6 @@ public struct MWSessionSnapshot: Sendable, Identifiable {
         self.deviceSerial   = record.deviceSerial
         self.deviceModel    = record.deviceModel
         self.deviceFirmware = record.deviceFirmware
+        self.label          = record.label
     }
 }

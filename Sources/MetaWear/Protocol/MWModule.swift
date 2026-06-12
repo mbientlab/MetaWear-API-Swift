@@ -24,6 +24,18 @@ public enum MWModule: UInt8, CaseIterable, Sendable {
     case humidity      = 0x16
     case sensorFusion  = 0x19
     case debug         = 0xFE
+
+    // MARK: - Display
+
+    /// Human-readable module name. Identical to the case name for every
+    /// module except `.switch_`, where the trailing underscore (required
+    /// because `switch` is a Swift keyword) is stripped.
+    public var name: String {
+        switch self {
+        case .switch_: return "switch"
+        default:       return String(describing: self)
+        }
+    }
 }
 
 // MARK: - Packet builder
@@ -37,6 +49,31 @@ public enum MWPacket {
     /// One-shot read — sets bit 7 of the register byte
     public static func read(_ module: MWModule, _ register: UInt8, _ payload: UInt8...) -> Data {
         Data([module.rawValue, register | 0x80] + payload)
+    }
+
+    /// Build a command using a `RawRepresentable` register enum.
+    ///
+    /// Equivalent to `command(_:_:_:)` with `register.rawValue`, but lets per-module
+    /// register enums (e.g. `MWAccelerometerRegister.dataInterruptConfig`) be passed
+    /// directly so the call site documents which register is being written.
+    public static func command<R: RawRepresentable>(
+        _ module: MWModule, _ register: R, _ payload: [UInt8] = []
+    ) -> Data where R.RawValue == UInt8 {
+        Data([module.rawValue, register.rawValue] + payload)
+    }
+
+    /// Variadic overload of the `RawRepresentable`-register `command(_:_:_:)`.
+    public static func command<R: RawRepresentable>(
+        _ module: MWModule, _ register: R, _ payload: UInt8...
+    ) -> Data where R.RawValue == UInt8 {
+        Data([module.rawValue, register.rawValue] + payload)
+    }
+
+    /// One-shot read using a `RawRepresentable` register enum.
+    public static func read<R: RawRepresentable>(
+        _ module: MWModule, _ register: R, _ payload: [UInt8] = []
+    ) -> Data where R.RawValue == UInt8 {
+        Data([module.rawValue, register.rawValue | 0x80] + payload)
     }
 
     /// Parse the module ID from an incoming notification

@@ -18,20 +18,50 @@ private func makeConnectableTransport() async -> MockBLETransport {
 }
 
 /// After calling connect(), module discovery fires concurrent reads. This task
-/// watches writtenData for module-info reads and injects stub responses.
+/// continuously polls writtenData and injects a stub response the first time
+/// it sees each module-info read. Polling (rather than a one-shot 15 ms sleep)
+/// keeps the helper robust under heavy parallel-test load — when CPU is busy,
+/// `connect()` may not write its reads within any fixed delay, and the old
+/// fire-once pattern would silently drop them.
 private func autoReplyModuleDiscovery(transport: MockBLETransport) -> Task<Void, Never> {
     Task {
-        // Wait long enough for the discovery reads to be written
-        try? await Task.sleep(nanoseconds: 15_000_000)   // 15ms
-        let written = await transport.writtenData
-        for (cmd, _, _) in written {
-            guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
-            let moduleId = cmd[0]
-            // impl=0x01 (present) for accelerometer/gyro/baro/magnet/fusion; 0xFF otherwise
-            let present: Set<UInt8> = [0x03, 0x13, 0x12, 0x15, 0x19]
-            let impl: UInt8 = present.contains(moduleId) ? 0x01 : 0xFF
-            await transport.inject(notification: Data([moduleId, 0x80, impl, 0x00]),
-                                   to: MWUUIDs.notify)
+        var responded = Set<Data>()
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 3_000_000)   // 3ms poll
+            let written = await transport.writtenData
+            for (cmd, _, _) in written {
+                guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
+                guard !responded.contains(cmd) else { continue }
+                responded.insert(cmd)
+                let moduleId = cmd[0]
+                // impl=0x01 (present) for accelerometer/gyro/baro/magnet/fusion; 0xFF otherwise
+                let present: Set<UInt8> = [0x03, 0x13, 0x12, 0x15, 0x19]
+                let impl: UInt8 = present.contains(moduleId) ? 0x01 : 0xFF
+                await transport.inject(notification: Data([moduleId, 0x80, impl, 0x00]),
+                                       to: MWUUIDs.notify)
+            }
+        }
+    }
+}
+
+/// Same shape as `autoReplyModuleDiscovery` but every module is reported
+/// absent (impl=0xFF). Used by tests that want to exercise the "module not
+/// present" code paths.
+private func autoReplyAllAbsent(transport: MockBLETransport) -> Task<Void, Never> {
+    Task {
+        var responded = Set<Data>()
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 3_000_000)
+            let written = await transport.writtenData
+            for (cmd, _, _) in written {
+                guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
+                guard !responded.contains(cmd) else { continue }
+                responded.insert(cmd)
+                await transport.inject(
+                    notification: Data([cmd[0], 0x80, 0xFF, 0x00]),
+                    to: MWUUIDs.notify
+                )
+            }
         }
     }
 }
@@ -93,6 +123,34 @@ struct DeviceConnectionTests {
         }
     }
 
+    @Test func connect_whileAlreadyConnecting_throws() async throws {
+        let transport = await makeConnectableTransport()
+        // Widen the connecting window so a concurrent caller sees state == .connecting
+        await transport.setConnectDelay(.milliseconds(50))
+        let device = MetaWearDevice(identifier: UUID(), transport: transport)
+
+        let discovery = autoReplyModuleDiscovery(transport: transport)
+        defer { discovery.cancel() }
+
+        // Launch first connect in background; it will sit in transport.connect for 50ms.
+        let firstConnect = Task { try await device.connect() }
+        defer { firstConnect.cancel() }
+
+        // Yield so the first connect can acquire the actor and set state = .connecting.
+        try await Task.sleep(nanoseconds: 5_000_000)
+
+        // A second concurrent connect must be rejected.
+        do {
+            try await device.connect()
+            Issue.record("Expected invalidState error while first connect is in flight")
+        } catch let err as MWError {
+            if case .invalidState = err { /* expected */ }
+            else { Issue.record("Wrong error type: \(err)") }
+        }
+
+        try await firstConnect.value
+    }
+
     @Test func disconnect_transitionsToDisconnected() async throws {
         let transport = await makeConnectableTransport()
         let device = MetaWearDevice(identifier: UUID(), transport: transport)
@@ -137,7 +195,7 @@ struct DeviceStreamingGuardTests {
     @Test func stream_transitionsToStreaming() async throws {
         let (device, _) = try await connectedDevice()
         let sensor = MWAccelerometerBMI160(odr: .hz100, range: .g2)
-        _ = try await device.stream(sensor, usePacked: false)
+        _ = try await device.startStream(sensor, usePacked: false)
         let state = await device.state
         #expect(state == .streaming)
     }
@@ -146,10 +204,10 @@ struct DeviceStreamingGuardTests {
         let (device, _) = try await connectedDevice()
         let sensor = MWAccelerometerBMI160(odr: .hz100, range: .g2)
 
-        _ = try await device.stream(sensor, usePacked: false)  // → .streaming
+        _ = try await device.startStream(sensor, usePacked: false)  // → .streaming
 
         do {
-            _ = try await device.stream(sensor, usePacked: false)  // must throw
+            _ = try await device.startStream(sensor, usePacked: false)  // must throw
             Issue.record("Expected invalidState on second stream call")
         } catch let err as MWError {
             if case .invalidState = err { /* expected */ }
@@ -160,7 +218,7 @@ struct DeviceStreamingGuardTests {
     @Test func stream_sendsConfigureEnableStartCommands() async throws {
         let (device, transport) = try await connectedDevice()
         let sensor = MWAccelerometerBMI160(odr: .hz100, range: .g2)
-        _ = try await device.stream(sensor, usePacked: false)
+        _ = try await device.startStream(sensor, usePacked: false)
 
         let written = await transport.writtenData
         let commands = written.map { $0.0 }
@@ -175,7 +233,7 @@ struct DeviceStreamingGuardTests {
     @Test func stopStreaming_transitionsBackToIdle() async throws {
         let (device, _) = try await connectedDevice()
         let sensor = MWAccelerometerBMI160(odr: .hz100, range: .g2)
-        _ = try await device.stream(sensor, usePacked: false)
+        _ = try await device.startStream(sensor, usePacked: false)
 
         try await device.stopStreaming(sensor)
         let state = await device.state
@@ -185,7 +243,7 @@ struct DeviceStreamingGuardTests {
     @Test func stopStreaming_sendsStopAndDisableCommands() async throws {
         let (device, transport) = try await connectedDevice()
         let sensor = MWAccelerometerBMI160(odr: .hz100, range: .g2)
-        _ = try await device.stream(sensor, usePacked: false)
+        _ = try await device.startStream(sensor, usePacked: false)
 
         let beforeCount = await transport.writtenData.count
         try await device.stopStreaming(sensor)
@@ -212,7 +270,9 @@ struct DeviceLoggingGuardTests {
     }
 
     /// startLogging subscribes each data chunk and waits for a logger-ID response.
-    /// Inject one [0x0B, 0x82, id] per chunk to unblock it.
+    /// Inject one [0x0B, 0x02, id] per chunk to unblock it.
+    /// The firmware reply is a plain notification (bit-7 clear on the register
+    /// byte) — not a read response.
     private func startLogging<L: MWLoggable>(
         _ loggable: L,
         on device: MetaWearDevice,
@@ -222,7 +282,7 @@ struct DeviceLoggingGuardTests {
         let injector = Task {
             for id in ids {
                 try? await Task.sleep(nanoseconds: 10_000_000)
-                await transport.inject(notification: Data([0x0B, 0x82, id]), to: MWUUIDs.notify)
+                await transport.inject(notification: Data([0x0B, 0x02, id]), to: MWUUIDs.notify)
             }
         }
         defer { injector.cancel() }
@@ -276,12 +336,14 @@ struct DeviceOneShotReadTests {
     @Test func readBattery_parsesBatteryState() async throws {
         let (device, transport) = try await connectedDevice()
 
-        // Inject the battery response after the read command fires
+        // Inject the battery response after the read command fires.
+        // BATTERY_STATE is register 0x0C on the settings module — the firmware
+        // emits the read response as [0x11, 0x8C, charge, volt_lo, volt_hi].
         let batteryTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-            // [settings module, reg 0x91 (0x11|0x80), charge=85, volt 0x9C, 0x0F]
+            try? await Task.sleep(nanoseconds: 3_000_000)
+            // charge=0x55 (85), voltage=0x0F9C (3996)
             await transport.inject(
-                notification: Data([0x11, 0x91, 0x55, 0x9C, 0x0F]),
+                notification: Data([0x11, 0x8C, 0x55, 0x9C, 0x0F]),
                 to: MWUUIDs.notify
             )
         }
@@ -320,8 +382,8 @@ struct DeviceModuleHelperTests {
         let transport = await makeConnectableTransport()
         let device = MetaWearDevice(identifier: UUID(), transport: transport)
         let discovery = autoReplyModuleDiscovery(transport: transport)
+        defer { discovery.cancel() }
         try await device.connect()
-        discovery.cancel()
 
         // autoReplyModuleDiscovery marks gyro (0x13) as present
         let has = await device.hasGyroscope
@@ -333,17 +395,7 @@ struct DeviceModuleHelperTests {
         let device = MetaWearDevice(identifier: UUID(), transport: transport)
 
         // Reply with all modules absent (impl=0xFF)
-        let allAbsent = Task {
-            try? await Task.sleep(nanoseconds: 15_000_000)
-            let written = await transport.writtenData
-            for (cmd, _, _) in written {
-                guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
-                await transport.inject(
-                    notification: Data([cmd[0], 0x80, 0xFF, 0x00]),
-                    to: MWUUIDs.notify
-                )
-            }
-        }
+        let allAbsent = autoReplyAllAbsent(transport: transport)
         defer { allAbsent.cancel() }
 
         try await device.connect()
@@ -367,10 +419,11 @@ struct FusionCalibrationTests {
 
         // Inject calibration response: [0x19, 0x8B, accel=2, gyro=3, mag=1]
         let calibPacket = Data([0x19, 0x8B, 0x02, 0x03, 0x01])
-        Task {
+        let injector = Task {
             try? await Task.sleep(nanoseconds: 5_000_000)
             await transport.inject(notification: calibPacket, to: MWUUIDs.notify)
         }
+        defer { injector.cancel() }
 
         let cal = try await device.readFusionCalibration()
         #expect(cal.accelerometer == 2)
@@ -387,10 +440,11 @@ struct FusionCalibrationTests {
         try await device.connect()
 
         let calibPacket = Data([0x19, 0x8B, 0x03, 0x03, 0x03])
-        Task {
+        let injector = Task {
             try? await Task.sleep(nanoseconds: 5_000_000)
             await transport.inject(notification: calibPacket, to: MWUUIDs.notify)
         }
+        defer { injector.cancel() }
 
         let cal = try await device.readFusionCalibration()
         #expect(cal.accelerometer == 3)
@@ -403,15 +457,7 @@ struct FusionCalibrationTests {
         let device = MetaWearDevice(identifier: UUID(), transport: transport)
 
         // Reply all modules absent
-        let allAbsent = Task {
-            try? await Task.sleep(nanoseconds: 15_000_000)
-            let written = await transport.writtenData
-            for (cmd, _, _) in written {
-                guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
-                await transport.inject(notification: Data([cmd[0], 0x80, 0xFF, 0x00]),
-                                       to: MWUUIDs.notify)
-            }
-        }
+        let allAbsent = autoReplyAllAbsent(transport: transport)
         defer { allAbsent.cancel() }
         try await device.connect()
 
@@ -447,15 +493,7 @@ struct MakeAccelerometerTests {
         let transport = await makeConnectableTransport()
         let device = MetaWearDevice(identifier: UUID(), transport: transport)
 
-        let allAbsent = Task {
-            try? await Task.sleep(nanoseconds: 15_000_000)
-            let written = await transport.writtenData
-            for (cmd, _, _) in written {
-                guard cmd.count >= 2, (cmd[1] & 0x80) != 0 else { continue }
-                await transport.inject(notification: Data([cmd[0], 0x80, 0xFF, 0x00]),
-                                       to: MWUUIDs.notify)
-            }
-        }
+        let allAbsent = autoReplyAllAbsent(transport: transport)
         defer { allAbsent.cancel() }
         try await device.connect()
 

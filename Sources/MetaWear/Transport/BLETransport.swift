@@ -7,6 +7,12 @@ public struct ScanResult: Sendable {
     public let identifier: UUID
     public let name: String?
     public let rssi: Int
+    /// Raw bytes from `CBAdvertisementDataManufacturerDataKey`, if present.
+    /// For iBeacon advertisements this is the full manufacturer-specific payload
+    /// beginning with the Apple company ID (`0x4C 0x00`) followed by the iBeacon
+    /// sub-type byte (`0x02`), length (`0x15`), 16-byte UUID, 2-byte major, 2-byte
+    /// minor, and 1-byte measured-RSSI reference.
+    public let manufacturerData: Data?
 }
 
 // MARK: - BLE Transport protocol
@@ -31,4 +37,9 @@ public protocol BLETransport: Actor {
     /// Subscribe to notifications from a characteristic.
     /// The stream terminates with an error on BLE disconnect.
     func notifications(from characteristic: CBUUID) -> AsyncThrowingStream<Data, Error>
+
+    /// Read the current RSSI of the active connection, in dBm. Requires an
+    /// established connection. Larger values (i.e. closer to zero) indicate a
+    /// stronger received signal at the central.
+    func readRSSI() async throws -> Int
 }

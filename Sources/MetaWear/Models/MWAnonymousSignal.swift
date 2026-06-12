@@ -20,9 +20,28 @@ public struct MWAnonymousSignal: Sendable {
     /// The root sensor signal this chain ultimately reads from.
     public let rootModule: MWModule
 
-    /// Raw chunks this signal reads from the log stream, in order.
-    /// Each chunk maps to one logger ID assigned by the board.
-    public let loggerIDs: [UInt8]
+    /// Logger chunks this signal reads from the log stream, in concatenation
+    /// order. Each entry carries the board-assigned logger ID and the byte
+    /// count the chunk contributes to the assembled payload — both needed by
+    /// `MetaWearDevice.decodeEntries(_:for:)` to reassemble fragmented entries.
+    public let chunks: [Chunk]
+
+    /// One logger subscription that contributes a slice of the full payload.
+    /// A 6-byte XYZ signal that exceeds the firmware's 4-byte-per-entry limit,
+    /// for example, surfaces as two chunks (4 bytes + 2 bytes).
+    public struct Chunk: Sendable, Equatable {
+        public let id: UInt8
+        public let byteCount: Int
+        public init(id: UInt8, byteCount: Int) {
+            self.id = id
+            self.byteCount = byteCount
+        }
+    }
+
+    /// Convenience: just the logger IDs, in the same order as `chunks`.
+    /// Provided for callers that only care about identity (e.g. matching
+    /// against `queryActiveLoggers()` output).
+    public var loggerIDs: [UInt8] { chunks.map(\.id) }
 
     /// Decode a single raw log entry's payload into typed samples.
     /// Normal signals yield a 1-element array; the Fuser yields 2 elements
@@ -40,12 +59,12 @@ public struct MWAnonymousSignal: Sendable {
     public init(
         identifier: String,
         rootModule: MWModule,
-        loggerIDs: [UInt8],
+        chunks: [Chunk],
         decode: @escaping @Sendable (Data) throws -> [Output]
     ) {
         self.identifier = identifier
         self.rootModule = rootModule
-        self.loggerIDs = loggerIDs
+        self.chunks = chunks
         self.decode = decode
     }
 }
@@ -55,7 +74,7 @@ extension MWAnonymousSignal: Equatable {
     public static func == (lhs: MWAnonymousSignal, rhs: MWAnonymousSignal) -> Bool {
         lhs.identifier == rhs.identifier
             && lhs.rootModule == rhs.rootModule
-            && lhs.loggerIDs == rhs.loggerIDs
+            && lhs.chunks == rhs.chunks
     }
 }
 
@@ -331,7 +350,9 @@ enum MWAnonymousSignalBuilder {
             return nil
         }
 
-        let loggerIDs = chunks.map { $0.loggerID }
+        let signalChunks = chunks.map {
+            MWAnonymousSignal.Chunk(id: $0.loggerID, byteCount: Int($0.chunkLength))
+        }
 
         let decoder = flatDecoder(
             module: first.module,
@@ -344,7 +365,7 @@ enum MWAnonymousSignalBuilder {
         return MWAnonymousSignal(
             identifier: identifier,
             rootModule: first.module,
-            loggerIDs: loggerIDs,
+            chunks: signalChunks,
             decode: decoder
         )
     }
@@ -479,7 +500,9 @@ enum MWAnonymousSignalBuilder {
             captureStateOfTerminalBuffer: isStateCapture
         ) else { return nil }
 
-        let loggerIDs = chunks.sorted { $0.chunkOffset < $1.chunkOffset }.map { $0.loggerID }
+        let signalChunks = chunks.sorted { $0.chunkOffset < $1.chunkOffset }.map {
+            MWAnonymousSignal.Chunk(id: $0.loggerID, byteCount: Int($0.chunkLength))
+        }
         let terminal = chain.last!
         let decoder = chainedDecoder(
             terminal: terminal,
@@ -492,7 +515,7 @@ enum MWAnonymousSignalBuilder {
         return MWAnonymousSignal(
             identifier: identifier,
             rootModule: rootProc.parentModule,
-            loggerIDs: loggerIDs,
+            chunks: signalChunks,
             decode: decoder
         )
     }

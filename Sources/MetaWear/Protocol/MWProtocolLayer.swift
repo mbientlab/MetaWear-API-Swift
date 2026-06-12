@@ -39,8 +39,30 @@ actor MWProtocolLayer {
     // Used when the board responds with a plain notification (bit 7 NOT set), e.g. I2C/SPI reads.
     private var notifyWaiters: [ModuleRegisterKey: [ReadWaiter]] = [:]
 
+    /// Waiter IDs whose cancellation arrived before the waiter was enqueued.
+    ///
+    /// `sendAndAwait`/`writeAndAwaitNotification` park their continuation from
+    /// an unstructured `Task`, while the task-group's `onCancel` handler runs
+    /// `cancelRead`/`cancelNotifyWaiter` from another. If the cancel lands
+    /// first, it finds no waiter to fail — and the enqueue that follows would
+    /// park a continuation nothing ever resumes, deadlocking the call at the
+    /// task-group scope exit. Tombstoning the ID makes the enqueue fail the
+    /// continuation immediately regardless of ordering. Cleared wholesale in
+    /// `failAllWaiters` so rare orphans (cancel racing a normal resume) can't
+    /// accumulate across connections.
+    private var tombstonedWaiterIDs: Set<UUID> = []
+
     // Ongoing notification subscribers — keyed by (module, register).
-    private var notifyStreams: [ModuleRegisterKey: AsyncThrowingStream<Data, Error>.Continuation] = [:]
+    private var notifyStreams: [ModuleRegisterKey: NotifyStream] = [:]
+
+    /// Pairs a stream continuation with a generation counter so the
+    /// `onTermination` cleanup can tell whether the dictionary entry it is
+    /// about to remove is still its own (a re-subscribe may have replaced it).
+    private struct NotifyStream {
+        let generation: UInt64
+        let continuation: AsyncThrowingStream<Data, Error>.Continuation
+    }
+    private var streamGeneration: UInt64 = 0
 
     private var routerTask: Task<Void, Never>?
 
@@ -156,12 +178,22 @@ actor MWProtocolLayer {
     }
 
     private func enqueueNotifyWaiter(key: ModuleRegisterKey, id: UUID, continuation: CheckedContinuation<Data, Error>) {
+        if tombstonedWaiterIDs.remove(id) != nil {
+            // Cancelled before we got here — fail immediately, never park.
+            continuation.resume(throwing: MWError.timeout)
+            return
+        }
         notifyWaiters[key, default: []].append(ReadWaiter(id: id, continuation: continuation))
     }
 
     private func cancelNotifyWaiter(key: ModuleRegisterKey, id: UUID, error: Error) {
         guard var waiters = notifyWaiters[key],
-              let idx = waiters.firstIndex(where: { $0.id == id }) else { return }
+              let idx = waiters.firstIndex(where: { $0.id == id }) else {
+            // Not enqueued yet (or already resumed) — tombstone so a late
+            // enqueue fails its continuation instead of parking it forever.
+            tombstonedWaiterIDs.insert(id)
+            return
+        }
         let waiter = waiters.remove(at: idx)
         notifyWaiters[key] = waiters.isEmpty ? nil : waiters
         waiter.continuation.resume(throwing: error)
@@ -205,12 +237,22 @@ actor MWProtocolLayer {
     }
 
     private func enqueueRead(key: ModuleRegisterKey, id: UUID, continuation: CheckedContinuation<Data, Error>) {
+        if tombstonedWaiterIDs.remove(id) != nil {
+            // Cancelled before we got here — fail immediately, never park.
+            continuation.resume(throwing: MWError.timeout)
+            return
+        }
         readWaiters[key, default: []].append(ReadWaiter(id: id, continuation: continuation))
     }
 
     private func cancelRead(key: ModuleRegisterKey, id: UUID, error: Error) {
         guard var waiters = readWaiters[key],
-              let idx = waiters.firstIndex(where: { $0.id == id }) else { return }
+              let idx = waiters.firstIndex(where: { $0.id == id }) else {
+            // Not enqueued yet (or already resumed) — tombstone so a late
+            // enqueue fails its continuation instead of parking it forever.
+            tombstonedWaiterIDs.insert(id)
+            return
+        }
         let waiter = waiters.remove(at: idx)
         readWaiters[key] = waiters.isEmpty ? nil : waiters
         waiter.continuation.resume(throwing: error)
@@ -219,16 +261,41 @@ actor MWProtocolLayer {
     // MARK: - Subscribing
 
     /// Subscribe to ongoing notifications from a module/register.
+    ///
+    /// Re-subscribing to the same key finishes the previous stream (its
+    /// consumer sees a clean end rather than suspending forever). When the
+    /// consumer stops iterating — cancellation or normal exit — the
+    /// `onTermination` hook removes the registration, so abandoned streams
+    /// don't linger in the routing table.
     func subscribe(to module: MWModule, register: UInt8) -> AsyncThrowingStream<Data, Error> {
         let key = ModuleRegisterKey(module: module.rawValue, register: register & 0x3F)
-        let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
-        notifyStreams[key] = continuation
+        notifyStreams[key]?.continuation.finish()
+        streamGeneration += 1
+        let generation = streamGeneration
+        // Bounded buffer: sensor notifications arrive at up to ~200 packets/s.
+        // If the consumer stalls, keep the newest packets rather than growing
+        // the buffer without bound; for live sensor data, stale samples are
+        // the right thing to shed.
+        let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream(
+            bufferingPolicy: .bufferingNewest(256)
+        )
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeStream(key: key, generation: generation) }
+        }
+        notifyStreams[key] = NotifyStream(generation: generation, continuation: continuation)
         return stream
     }
 
     func unsubscribe(from module: MWModule, register: UInt8) {
         let key = ModuleRegisterKey(module: module.rawValue, register: register & 0x3F)
-        notifyStreams[key]?.finish()
+        notifyStreams[key]?.continuation.finish()
+        notifyStreams.removeValue(forKey: key)
+    }
+
+    /// `onTermination` cleanup — only removes the entry if it still belongs to
+    /// the terminating stream (a newer subscribe may have replaced it).
+    private func removeStream(key: ModuleRegisterKey, generation: UInt64) {
+        guard notifyStreams[key]?.generation == generation else { return }
         notifyStreams.removeValue(forKey: key)
     }
 
@@ -286,7 +353,7 @@ actor MWProtocolLayer {
                 waiter.continuation.resume(returning: packet)
             }
             // Also deliver to ongoing notification streams (e.g. streaming sensors)
-            notifyStreams[key]?.yield(packet)
+            notifyStreams[key]?.continuation.yield(packet)
         }
     }
 
@@ -305,7 +372,8 @@ actor MWProtocolLayer {
             waiters.forEach { $0.continuation.resume(throwing: error) }
         }
         notifyWaiters.removeAll()
-        notifyStreams.values.forEach { $0.finish(throwing: error) }
+        tombstonedWaiterIDs.removeAll()
+        notifyStreams.values.forEach { $0.continuation.finish(throwing: error) }
         notifyStreams.removeAll()
     }
 }

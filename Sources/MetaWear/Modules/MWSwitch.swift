@@ -14,7 +14,7 @@ import Foundation
 ///
 /// Usage:
 /// ```swift
-/// let stream = try await device.stream(MWSwitch())
+/// let stream = try await device.startStream(MWSwitch())
 /// for try await event in stream {
 ///     print(event.value ? "pressed" : "released")
 /// }
@@ -40,15 +40,19 @@ public struct MWSwitch: MWStreamable {
     /// No configuration needed — the switch fires on hardware events only.
     public var configureCommands: [Data] { [] }
 
-    /// Subscribe to state-change notifications (the only command needed).
-    /// Mirrors Python `test_mbl_mw_switch_subscribe` → `[0x01, 0x01, 0x01]`.
-    public var enableCommand: Data  { MWPacket.command(.switch_, 0x01, [0x01]) }
-    /// No-op: the switch module subscribes with a single command (enableCommand).
+    // The switch's "subscribe" and "enable" are the same write
+    // (`[0x01, 0x01, 0x01]`) — `mbl_mw_datasignal_subscribe` is the only
+    // command the C++/Combine SDKs ever send for this module. The actor's
+    // generic `startStream` already issues `[module, dataRegister, 0x01]`
+    // before walking the enable/start commands, and `stopStreaming` issues
+    // the matching `[module, dataRegister, 0x00]` on the way out, so all
+    // four module-level hooks below are deliberate no-ops. Re-issuing the
+    // same write would have been at best redundant and at worst toggled
+    // notifications back off on certain firmwares — which presented as a
+    // silent stream during hardware testing.
+    public var enableCommand: Data  { Data() }
     public var startCommand: Data   { Data() }
-    /// Unsubscribe from state-change notifications.
-    /// Mirrors Python `test_mbl_mw_switch_unsubscribe` → `[0x01, 0x01, 0x00]`.
-    public var disableCommand: Data { MWPacket.command(.switch_, 0x01, [0x00]) }
-    /// No-op: the switch module unsubscribes with a single command (disableCommand).
+    public var disableCommand: Data { Data() }
     public var stopCommand: Data    { Data() }
 
     // MARK: Parsing
