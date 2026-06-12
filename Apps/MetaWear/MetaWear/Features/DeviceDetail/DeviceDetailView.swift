@@ -18,7 +18,7 @@ struct DeviceDetailView: View {
             }
             .padding()
         }
-        .navigationTitle(appStore.scanner.advertisedNames[appStore.activeDeviceID ?? UUID()] ?? "Device")
+        .navigationTitle(appStore.activeDeviceName)
         .toolbar {
             if let viewModel {
                 ToolbarItem(placement: .topBarTrailing) {

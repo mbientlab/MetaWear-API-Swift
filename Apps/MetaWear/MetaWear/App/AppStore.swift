@@ -42,6 +42,30 @@ final class AppStore {
         refreshPendingLogSessions()
     }
 
+    // MARK: - Demo device
+
+    /// A fully simulated MetaWear (see `DemoBLETransport`). Created on first
+    /// access so non-demo sessions never pay for it. Reused across
+    /// connect/disconnect cycles like a real discovered device.
+    private var _demoDevice: MetaWearDevice?
+    var demoDevice: MetaWearDevice {
+        if let device = _demoDevice { return device }
+        let device = MetaWearDevice(
+            identifier: DemoBLETransport.deviceIdentifier,
+            transport: DemoBLETransport()
+        )
+        _demoDevice = device
+        return device
+    }
+
+    /// Display name for the active device: advertised name when we have one,
+    /// the demo label for the simulated device, generic fallback otherwise.
+    var activeDeviceName: String {
+        guard let id = activeDeviceID else { return "Device" }
+        if id == DemoBLETransport.deviceIdentifier { return DemoMode.deviceName }
+        return scanner.advertisedNames[id] ?? "MetaWear"
+    }
+
     var connectingDeviceID: UUID?
 
     func connect(to device: MetaWearDevice) async {
@@ -369,6 +393,9 @@ final class AppStore {
     }
 
     private func rememberDevice(_ device: MetaWearDevice) async {
+        // The simulated device never persists into Remembered — it would show
+        // up as a stale phantom row in non-demo sessions.
+        guard device.identifier != DemoBLETransport.deviceIdentifier else { return }
         let info = await device.deviceInfo
         let id = device.identifier
         let context = containers.cloud.mainContext

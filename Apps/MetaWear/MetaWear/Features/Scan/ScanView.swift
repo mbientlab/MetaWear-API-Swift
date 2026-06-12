@@ -57,6 +57,34 @@ struct ScanView: View {
                 }
             }
 
+            if DemoMode.isEnabled {
+                Section("Demo") {
+                    Button {
+                        Task { await connect(to: appStore.demoDevice) }
+                    } label: {
+                        HStack {
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(DemoMode.deviceName)
+                                        .foregroundStyle(.primary)
+                                    Text("Synthetic sensors — no hardware needed")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: "sparkles")
+                                    .foregroundStyle(Palette.accent)
+                            }
+                            Spacer()
+                            if appStore.connectingDeviceID == DemoBLETransport.deviceIdentifier {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .accessibilityHint("Connects to a simulated MetaWear with synthetic sensor data")
+                }
+            }
+
             Section {
                 NavigationLink(value: DeviceFeaturePane.sessionHistory) {
                     Label("Session History", systemImage: "clock.arrow.circlepath")
