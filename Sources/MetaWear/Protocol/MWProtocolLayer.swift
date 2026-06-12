@@ -135,10 +135,14 @@ actor MWProtocolLayer {
 
     /// Write an arbitrary command and await a response notification on `(awaitModule, awaitRegister)`.
     /// Used for commands that trigger a board response on a different (or same) register.
-    /// Throws `MWError.timeout` if no response arrives within `readTimeout`.
-    func writeAndRead(command: Data, awaitModule: MWModule, awaitRegister: UInt8) async throws -> Data {
+    /// Throws `MWError.timeout` if no response arrives within `timeout` (default `readTimeout`).
+    /// Pass a shorter `timeout` for probe-style reads where a missing response is an
+    /// expected outcome (e.g. enumerating logger/processor slots), so the caller
+    /// isn't stalled the full 5 s discovering "no more entries".
+    func writeAndRead(command: Data, awaitModule: MWModule, awaitRegister: UInt8,
+                      timeout: Duration = MWProtocolLayer.readTimeout) async throws -> Data {
         mwLog("[Proto] writeAndRead: \(command.map { String(format: "%02X", $0) }.joined(separator: " ")) awaitMod=\(String(format: "%02X", awaitModule.rawValue)) awaitReg=\(String(format: "%02X", awaitRegister))")
-        return try await sendAndAwait(command: command, awaitModule: awaitModule, awaitRegister: awaitRegister)
+        return try await sendAndAwait(command: command, awaitModule: awaitModule, awaitRegister: awaitRegister, timeout: timeout)
     }
 
     /// Write a command and await a **plain notification** (bit 7 NOT set) on `(awaitModule, awaitRegister)`.
@@ -199,7 +203,8 @@ actor MWProtocolLayer {
         waiter.continuation.resume(throwing: error)
     }
 
-    private func sendAndAwait(command: Data, awaitModule: MWModule, awaitRegister: UInt8) async throws -> Data {
+    private func sendAndAwait(command: Data, awaitModule: MWModule, awaitRegister: UInt8,
+                              timeout: Duration = MWProtocolLayer.readTimeout) async throws -> Data {
         let key = ModuleRegisterKey(module: awaitModule.rawValue, register: awaitRegister & 0x3F)
         let waiterID = UUID()
 
@@ -225,7 +230,7 @@ actor MWProtocolLayer {
 
             // Task 2: timeout sentinel
             group.addTask {
-                try await Task.sleep(for: Self.readTimeout)
+                try await Task.sleep(for: timeout)
                 throw MWError.timeout
             }
 

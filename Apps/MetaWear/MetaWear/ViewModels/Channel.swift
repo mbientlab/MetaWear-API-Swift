@@ -33,7 +33,6 @@ final class Channel: Identifiable {
     // All updated exclusively from the throttle loop, never per-sample.
 
     var displayBuffer: [AnyChartSample] = []
-    var droppedCount: Int = 0
     var latest: AnyChartSample?
     /// Effective sample rate (Hz) over the most recent samples.
     var effectiveHz: Double = 0

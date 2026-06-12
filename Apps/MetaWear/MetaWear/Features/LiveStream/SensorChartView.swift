@@ -155,9 +155,8 @@ struct SensorChartView: View {
     /// (Pa, lx, dps, °) get no fraction, finer units (g, ratio) get one.
     private var yAxisFormat: FloatingPointFormatStyle<Double> {
         switch axisStyle.unit {
-        case "g", "ratio":     return .number.precision(.fractionLength(1))
-        case "°C", "%", "µT":  return .number.precision(.fractionLength(1))
-        default:               return .number.precision(.fractionLength(0))
+        case "g", "ratio", "°C", "%", "µT": return .number.precision(.fractionLength(1))
+        default:                            return .number.precision(.fractionLength(0))
         }
     }
 }

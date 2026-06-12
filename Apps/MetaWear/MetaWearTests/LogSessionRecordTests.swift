@@ -8,11 +8,13 @@ import Foundation
 struct LogSessionRecordTests {
 
     @Test func roundTripsThroughSwiftData() throws {
-        let schema = Schema([LogSessionRecord.self])
-        let container = try ModelContainer(
-            for: schema,
-            configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-        )
+        // Use the app's own container factory (in-memory) instead of building
+        // an ad-hoc single-model container. On the iOS 26 simulator, creating
+        // a second container whose schema partially overlaps the host app's
+        // already-loaded 4-model schema throws
+        // `SwiftDataError.loadIssueModelContainer` — the full-schema factory
+        // matches what the app registered and loads cleanly.
+        let container = try AppModelContainer.makeShared(inMemory: true).local
         let context = container.mainContext
 
         let id = UUID()

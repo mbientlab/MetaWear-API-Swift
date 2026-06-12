@@ -1,6 +1,9 @@
 import Testing
 @testable import MetaWearApp
 
+// BandwidthAdvisor and SensorSelection are MainActor-isolated (the app's
+// default isolation), so the whole suite runs on the main actor.
+@MainActor
 @Suite("BandwidthAdvisor")
 struct BandwidthAdvisorTests {
 

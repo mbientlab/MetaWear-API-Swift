@@ -131,16 +131,33 @@ final class StreamSessionViewModel {
     /// feeding the consume task with samples before cancellation actually
     /// took effect — symptom seen on the barometer.
     private func tearDownStreams() async {
-        for (key, stop) in stopHandlers {
-            print("[Teardown] stopHandler \(key)")
+        for (_, stop) in stopHandlers {
             try? await stop()
         }
         stopHandlers.removeAll()
-        for (key, task) in streamTasks {
-            print("[Teardown] cancel task \(key)")
+        for (_, task) in streamTasks {
             task.cancel()
         }
         streamTasks.removeAll()
+    }
+
+    /// Terminate the session after a stream error (most commonly an
+    /// unexpected BLE disconnect, which fails every active stream at once).
+    /// Without this, `isStreaming` stayed true with dead streams — a zombie
+    /// session whose UI claimed to be live and whose stale `stopHandlers`
+    /// pointed at a gone device. The stop writes inside `tearDownStreams`
+    /// are best-effort (`try?`), so they fail fast when the device is gone
+    /// and still do the right thing when only a single stream errored.
+    private func failSession(with error: Error) async {
+        lastError = AppError(error: error)
+        guard isStreaming else { return }
+        isStreaming = false
+        isPaused = false
+        startedAt = nil
+        throttleTask?.cancel()
+        throttleTask = nil
+        await tearDownStreams()
+        selections = []
     }
 
     private func spawnStream(for selection: SensorSelection) async {
@@ -300,7 +317,7 @@ final class StreamSessionViewModel {
             } catch is CancellationError {
                 return
             } catch {
-                self?.lastError = AppError(error: error)
+                await self?.failSession(with: error)
             }
         }
     }
@@ -330,7 +347,7 @@ final class StreamSessionViewModel {
             } catch is CancellationError {
                 return
             } catch {
-                self?.lastError = AppError(error: error)
+                await self?.failSession(with: error)
             }
         }
     }

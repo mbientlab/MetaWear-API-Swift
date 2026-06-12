@@ -577,7 +577,15 @@ public actor MetaWearDevice {
     public func recoverLoggers<R: MWPolledLoggable>(
         for logger: MWPolledLogger<R>
     ) async throws {
-        let active = try await queryActiveLoggers()
+        try recoverLoggers(for: logger, using: try await queryActiveLoggers())
+    }
+
+    /// Variant of the polled-logger `recoverLoggers(for:)` that matches against
+    /// a pre-fetched enumeration — see the `MWLoggable` overload for rationale.
+    public func recoverLoggers<R: MWPolledLoggable>(
+        for logger: MWPolledLogger<R>,
+        using active: [ActiveLogger]
+    ) throws {
         let matched = active
             .filter { $0.module == logger.readable.module && $0.register == logger.readable.dataRegister }
             .sorted { $0.loggerID < $1.loggerID }
@@ -918,6 +926,14 @@ public actor MetaWearDevice {
 
     // MARK: - Logger recovery
 
+    /// Timeout for slot-enumeration probes (`queryActiveLoggers` /
+    /// `queryActiveProcessors`). The firmware does not respond at all for an
+    /// empty slot, so every enumeration *ends* with one timed-out probe —
+    /// at the default 5 s read timeout that put a 5-second stall in every
+    /// connect/recovery flow. 1 s is still ~20× a typical connection
+    /// interval, so a populated slot's response can't realistically miss it.
+    static let probeTimeout: Duration = .seconds(1)
+
     /// Query the board for all currently active logger subscriptions.
     /// Returns one entry per chunk (logger ID) in the order the board assigned them.
     /// Useful for rebuilding `loggerRegistry` after an app restart.
@@ -927,7 +943,8 @@ public actor MetaWearDevice {
             do {
                 // READ request for TRIGGER register: [0x0B, 0x82, logger_id]
                 let cmd = Data([MWModule.logging.rawValue, 0x82, id])
-                let response = try await proto.writeAndRead(command: cmd, awaitModule: .logging, awaitRegister: 0x02)
+                let response = try await proto.writeAndRead(command: cmd, awaitModule: .logging, awaitRegister: 0x02,
+                                                            timeout: Self.probeTimeout)
                 // Response: [0x0B, 0x82, source_module, source_register, source_data_id, packed_byte]
                 // The firmware does NOT echo the logger_id back — the queried `id`
                 // IS the logger ID. An empty slot is signalled by a short response
@@ -967,7 +984,8 @@ public actor MetaWearDevice {
             do {
                 let cmd = Data([MWModule.dataProcessor.rawValue, 0x82, id])
                 let response = try await proto.writeAndRead(
-                    command: cmd, awaitModule: .dataProcessor, awaitRegister: 0x02
+                    command: cmd, awaitModule: .dataProcessor, awaitRegister: 0x02,
+                    timeout: Self.probeTimeout
                 )
                 // Need at least: header(2) + parent_mod + parent_reg + parent_proc_id + packed + proc_type
                 guard response.count >= 7 else { break }
@@ -1110,8 +1128,18 @@ public actor MetaWearDevice {
     /// Rebuild `loggerRegistry` for a sensor after reconnect (e.g. after app restart).
     /// Queries the board for active loggers and matches them by module + register.
     /// Safe to call even if the registry already has an entry — it will be refreshed.
+    ///
+    /// Recovering several sensors? Enumerate once and use the `using:` overload —
+    /// each call of this convenience re-runs the slot enumeration (which always
+    /// ends with one timed-out probe).
     public func recoverLoggers<L: MWLoggable>(for loggable: L) async throws {
-        let active = try await queryActiveLoggers()
+        try recoverLoggers(for: loggable, using: try await queryActiveLoggers())
+    }
+
+    /// Variant of `recoverLoggers(for:)` that matches against a pre-fetched
+    /// enumeration from `queryActiveLoggers()`, so callers recovering multiple
+    /// sensors pay for the slot scan once.
+    public func recoverLoggers<L: MWLoggable>(for loggable: L, using active: [ActiveLogger]) throws {
         let matched = active
             .filter { $0.module == loggable.module && $0.register == loggable.dataRegister }
             .sorted { $0.loggerID < $1.loggerID }

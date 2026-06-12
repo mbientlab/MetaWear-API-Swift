@@ -60,12 +60,28 @@ final class AppStore {
         connectionState = .connecting
         do {
             try await device.connect()
+            // The user may have tapped a different device while this connect
+            // was in flight — that flow already disconnected us and owns the
+            // shared state now. Stand down without touching it.
+            guard activeDeviceID == device.identifier else {
+                try? await device.disconnect()
+                return
+            }
             await installUnexpectedDisconnectHandler(for: device)
             await cleanUpOrphanResources(on: device)
+            // Re-check after the cleanup awaits (orphan inspection can take
+            // seconds on boards with stale logger slots).
+            guard activeDeviceID == device.identifier else {
+                try? await device.disconnect()
+                return
+            }
             connectionState = await device.state
             connectingDeviceID = nil
             await rememberDevice(device)
         } catch {
+            // Same staleness rule on the failure path: only reset shared
+            // state if this device still owns it.
+            guard activeDeviceID == device.identifier else { return }
             connectingDeviceID = nil
             connectionState = .disconnected
             activeDevice = nil

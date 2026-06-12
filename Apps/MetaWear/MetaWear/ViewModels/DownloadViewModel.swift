@@ -59,8 +59,12 @@ final class DownloadViewModel {
         // 1. Recover the logger registry for every record so the per-record
         //    `decodeEntries` calls below can find their chunks. Safe to call
         //    in-session (just refreshes) and required across app restarts.
+        //    Enumerate the board's logger slots ONCE and share the result —
+        //    every enumeration ends with one timed-out probe, so per-record
+        //    enumeration multiplied that stall by the number of sensors.
+        let activeLoggers = (try? await device.queryActiveLoggers()) ?? []
         for record in records {
-            await recoverLoggers(for: record, chip: chip)
+            await recoverLoggers(for: record, chip: chip, active: activeLoggers)
         }
 
         // 2. ONE raw download. Entries from every logger come through this
@@ -129,7 +133,8 @@ final class DownloadViewModel {
     /// (`MWLoggable` or `MWPolledLogger`) corresponds to the record. Silently
     /// ignores errors — they'll resurface meaningfully when `decodeAndSave`
     /// can't find the chunks in the registry.
-    private func recoverLoggers(for record: LogSessionRecord, chip: MWSensorFusionChip) async {
+    private func recoverLoggers(for record: LogSessionRecord, chip: MWSensorFusionChip,
+                                active: [ActiveLogger]) async {
         guard let selection = LogSessionViewModel.decode(record.configJSON, kind: record.sensorKind) else { return }
         switch selection.id {
         case .temperature:
@@ -137,16 +142,16 @@ final class DownloadViewModel {
                 readable: MWThermometer(channel: UInt8(selection.channel ?? 0)),
                 periodMs: LogSessionViewModel.periodMs(forHz: selection.hz)
             )
-            try? await device.recoverLoggers(for: polled)
+            try? await device.recoverLoggers(for: polled, using: active)
         case .humidity:
             let polled = MWPolledLogger(
                 readable: MWHumidity(),
                 periodMs: LogSessionViewModel.periodMs(forHz: selection.hz)
             )
-            try? await device.recoverLoggers(for: polled)
+            try? await device.recoverLoggers(for: polled, using: active)
         default:
             if let loggable = LogSessionViewModel.makeLoggable(for: selection, chip: chip) {
-                try? await device.recoverLoggers(for: loggable)
+                try? await device.recoverLoggers(for: loggable, using: active)
             }
         }
     }
