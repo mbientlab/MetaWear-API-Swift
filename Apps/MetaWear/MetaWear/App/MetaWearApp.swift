@@ -22,6 +22,10 @@ struct MetaWearApp: App {
             RootView()
                 .environment(appStore)
                 .modelContainer(containers.cloud)
+                // Brand accent for every control — without this, buttons and
+                // links render the default system blue instead of the indigo
+                // the rest of the design system uses.
+                .tint(Palette.accent)
         }
     }
 }

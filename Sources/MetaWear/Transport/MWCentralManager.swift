@@ -36,6 +36,16 @@ actor MWCentralManager: NSObject {
 
     // MARK: - Public API used by MetaWearScanner
 
+    /// Observer invoked on every central state transition (and immediately
+    /// with the current state when installed). Lets the scanner surface
+    /// "Bluetooth is off / unauthorized / unsupported" to the UI.
+    private var stateObserver: (@Sendable (CBManagerState) -> Void)?
+
+    func setStateObserver(_ observer: @escaping @Sendable (CBManagerState) -> Void) {
+        stateObserver = observer
+        observer(central.state)
+    }
+
     /// Start scanning and yield results until the caller cancels the stream.
     func scan(for services: [CBUUID]?) -> AsyncStream<ScanResult> {
         let serviceStrings = services?.map { $0.uuidString }
@@ -171,6 +181,7 @@ extension MWCentralManager: CBCentralManagerDelegate {
 
     private func handleStateUpdate(_ state: CBManagerState) {
         mwLog("[BLE] centralManagerDidUpdateState: \(state.rawValue)")
+        stateObserver?(state)
         if state == .poweredOn, scanContinuation != nil {
             // A scan was requested before BT was ready — start it now.
             mwLog("[BLE] handleStateUpdate: BT now poweredOn, starting deferred scan")

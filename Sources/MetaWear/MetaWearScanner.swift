@@ -44,6 +44,22 @@ public final class MetaWearScanner {
     /// a prior session (stale or missing).
     public private(set) var advertisementLastSeen: [UUID: Date] = [:]
 
+    /// Last CoreBluetooth central state reported by the system. `nil` until
+    /// the first state callback arrives (CoreBluetooth delivers one shortly
+    /// after the central manager is created).
+    public private(set) var bluetoothState: CBManagerState?
+
+    /// True when scanning cannot possibly find anything: Bluetooth is turned
+    /// off, the app lacks Bluetooth permission, or the hardware doesn't exist
+    /// (e.g. the simulator). Drive a "turn on Bluetooth" empty state from
+    /// this instead of showing an eternal "Scanning…".
+    public var isBluetoothUnavailable: Bool {
+        switch bluetoothState {
+        case .poweredOff, .unauthorized, .unsupported: return true
+        default: return false
+        }
+    }
+
     // MARK: - Private
 
     private let centralManager: MWCentralManager
@@ -59,6 +75,18 @@ public final class MetaWearScanner {
 
     public init() {
         self.centralManager = MWCentralManager()
+        let manager = centralManager
+        Task { @MainActor [weak self] in
+            await self?.installStateObserver(on: manager)
+        }
+    }
+
+    private func installStateObserver(on manager: MWCentralManager) async {
+        await manager.setStateObserver { [weak self] state in
+            Task { @MainActor in
+                self?.bluetoothState = state
+            }
+        }
     }
 
     // MARK: - Scanning

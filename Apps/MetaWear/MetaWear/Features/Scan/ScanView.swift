@@ -1,5 +1,6 @@
 import SwiftUI
 import MetaWear
+import CoreBluetooth
 
 struct ScanView: View {
     @Environment(AppStore.self) private var appStore
@@ -40,7 +41,17 @@ struct ScanView: View {
                 let nearby = (viewModel?.devices ?? []).filter { d in
                     !appStore.rememberedDevices.contains { $0.peripheralUUID == d.identifier }
                 }
-                if nearby.isEmpty {
+                if appStore.scanner.isBluetoothUnavailable {
+                    // Without this, Bluetooth-off shows an eternal "Scanning…".
+                    Label {
+                        Text(bluetoothUnavailableMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                            .foregroundStyle(Palette.warning)
+                    }
+                } else if nearby.isEmpty {
                     Text(viewModel?.isScanning == true ? "Scanning…" : "Tap Scan to look for devices.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -92,6 +103,15 @@ struct ScanView: View {
             }
         }
         .navigationTitle("MetaWear")
+        // Brand the scan column: hide the List's opaque background and put
+        // the glass mesh directly behind it. (The RootView-level background
+        // sits behind the split view, but the sidebar column composites its
+        // own background above it, so it must be applied here too.)
+        .scrollContentBackground(.hidden)
+        .background {
+            GlassBackground()
+                .ignoresSafeArea()
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -146,5 +166,17 @@ struct ScanView: View {
         await appStore.connect(to: device)
         selectedDeviceID = device.identifier
         showDetail()
+    }
+
+    /// One actionable sentence per unavailability cause.
+    private var bluetoothUnavailableMessage: String {
+        switch appStore.scanner.bluetoothState {
+        case .unauthorized:
+            return "Bluetooth access is denied — allow it for MetaWear in Settings."
+        case .unsupported:
+            return "Bluetooth isn't available on this device."
+        default:
+            return "Bluetooth is turned off — turn it on in Settings or Control Center to scan."
+        }
     }
 }
