@@ -371,7 +371,7 @@ extension CoreBluetoothPeripheralTransport: CBPeripheralDelegate {
     }
 
     private func handleValueUpdate(uuid: CBUUID, data: Data) {
-        mwLog("[BLE] handleValueUpdate: \(uuid) \(data.count) bytes")
+        mwLogVerbose("[BLE] handleValueUpdate: \(uuid) \(data.count) bytes")
         if let continuation = readContinuations[uuid] {
             continuation.resume(returning: data)
             readContinuations.removeValue(forKey: uuid)

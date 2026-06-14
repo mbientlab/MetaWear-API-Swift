@@ -122,7 +122,7 @@ public final class MetaWearScanner {
                 if let mfg = result.manufacturerData {
                     self.advertisementManufacturerData[id] = mfg
                 }
-                mwLog("[Scanner] discovered: \(id) name='\(name)'")
+                mwLogVerbose("[Scanner] discovered: \(id) name='\(name)'")
                 // Accept only MetaWear peripherals (name starts with "MetaWear").
                 guard name.hasPrefix("MetaWear") else { continue }
                 guard self.discoveredDevices[id] == nil else { continue }
