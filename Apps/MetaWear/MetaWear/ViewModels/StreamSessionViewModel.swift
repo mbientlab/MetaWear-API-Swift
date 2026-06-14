@@ -377,7 +377,15 @@ final class StreamSessionViewModel {
                     // ms), instead of three per sample on the consume
                     // task. At 100 Hz × 3 sensors that's ~30 ticks/sec
                     // total UI churn rather than ~900 invalidations/sec.
-                    channel.displayBuffer = elements
+                    //
+                    // Decimate the *plotted* series to a screen-resolvable
+                    // point count. The chart is only a few hundred px wide,
+                    // so plotting the full 600-sample ring makes SwiftUI
+                    // Charts redraw far more LineMarks than the display can
+                    // show — the dominant cost in the live view, and what
+                    // makes the trace lag behind real time as the buffer
+                    // fills. `latest` and the archived ring stay full-res.
+                    channel.displayBuffer = Self.downsampledForChart(elements)
                     channel.latest = elements.last
                     channel.effectiveHz = Self.effectiveHz(from: elements)
                     channel.totalSamples = received
@@ -401,6 +409,27 @@ final class StreamSessionViewModel {
         let interval = last.timeIntervalSince(first)
         guard interval > 0 else { return 0 }
         return Double(window.count - 1) / interval
+    }
+
+    /// Most points to plot in a single live chart. A live card is only a few
+    /// hundred points wide on screen, so anything beyond this is sub-pixel
+    /// detail SwiftUI Charts pays to render but the user can't see.
+    nonisolated private static let maxChartPoints = 180
+
+    /// Uniformly decimate to at most `maxChartPoints` points for plotting,
+    /// always keeping the first and last sample so the trace spans the full
+    /// window and its live edge stays current. Integer index mapping — no
+    /// floating-point drift. Returns the input untouched when it's already
+    /// small enough. The caller keeps the full-resolution ring for archiving.
+    nonisolated static func downsampledForChart(_ samples: [AnyChartSample]) -> [AnyChartSample] {
+        let n = samples.count
+        guard n > maxChartPoints else { return samples }
+        var result = [AnyChartSample]()
+        result.reserveCapacity(maxChartPoints)
+        for j in 0..<maxChartPoints {
+            result.append(samples[j * (n - 1) / (maxChartPoints - 1)])
+        }
+        return result
     }
 
     // MARK: - Archive to Session History
