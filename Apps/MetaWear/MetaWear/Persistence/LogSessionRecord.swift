@@ -3,13 +3,17 @@ import SwiftData
 
 @Model
 final class LogSessionRecord {
-    @Attribute(.unique) var id: UUID
-    var deviceID: UUID
-    var sensorKind: String
-    var configJSON: String
-    var loggerKey: String
-    var startDate: Date
-    var statusRaw: String
+    // CloudKit-compatible: no unique constraint, every stored property is
+    // optional or defaulted. Uniqueness of `id` is guaranteed by the app
+    // assigning a fresh UUID per session; lookups use a UUID predicate.
+    var id: UUID = UUID()
+    var deviceID: UUID = UUID()
+    var sensorKind: String = ""
+    var configJSON: String = ""
+    var loggerKey: String = ""
+    var startDate: Date = Date.distantPast
+    /// Default must equal `Status.running.rawValue`.
+    var statusRaw: String = "running"
     /// JSON-encoded `MWPolledLoggerHandles` for `temperature` / `humidity`
     /// sessions where the board-side timer + event + logger chain must be
     /// remembered across app restarts. Nil for natively-loggable sensors,

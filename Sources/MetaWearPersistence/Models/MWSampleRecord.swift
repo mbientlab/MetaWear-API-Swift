@@ -20,20 +20,23 @@ import Foundation
 @Model
 public final class MWSampleRecord {
 
+    // Every stored property is optional or defaulted so this model can back a
+    // CloudKit-synced store, which requires defaults and forbids non-optional
+    // properties without one.
     public var session: MWSessionRecord?
 
     /// Wall-clock timestamp.
-    public var date: Date
+    public var date: Date = Date.distantPast
     /// Elapsed milliseconds since the MetaWear last reset.
-    public var tickMs: Double
+    public var tickMs: Double = 0
 
     /// Primary value component.
-    public var f0: Float
-    public var f1: Float
-    public var f2: Float
-    public var f3: Float
+    public var f0: Float = 0
+    public var f1: Float = 0
+    public var f2: Float = 0
+    public var f3: Float = 0
     /// CorrectedCartesianFloat accuracy (0 for all other types).
-    public var accuracy: UInt8
+    public var accuracy: UInt8 = 0
 
     public init(
         date: Date,
