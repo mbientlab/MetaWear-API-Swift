@@ -34,8 +34,20 @@ public actor MetaWearDevice {
     private let transport: any BLETransport
     private let proto: MWProtocolLayer
 
-    /// Modules that are currently streaming. Used to detect sensor fusion conflicts.
-    private var activeStreamModules: Set<MWModule> = []
+    private struct ActiveStreamKey: Hashable, Sendable {
+        let module: MWModule
+        let dataRegister: UInt8
+    }
+
+    /// Signals that are currently streaming. Used to detect duplicates and
+    /// sensor fusion / raw IMU conflicts.
+    private var activeStreamKeys: Set<ActiveStreamKey> = []
+
+    /// Fusion config command (`[0x19, 0x02, mode, range]`) of the currently
+    /// running sensor-fusion engine, or `nil` when no fusion output is active.
+    /// All simultaneous fusion outputs share one engine, so they must share this
+    /// mode/range; a second output requesting a different one is rejected.
+    private var activeFusionConfig: Data?
 
     /// Maps loggerKey → ordered list of (loggerID, byteCount) for each data chunk.
     /// Populated during startLogging; survives disconnects so download still works after reconnect.
@@ -97,7 +109,8 @@ public actor MetaWearDevice {
         await proto.stop()
         try await transport.disconnect()
         state = .disconnected
-        activeStreamModules.removeAll()
+        activeStreamKeys.removeAll()
+        activeFusionConfig = nil
         mwLog("[Device] disconnect: done")
     }
 
@@ -190,7 +203,8 @@ public actor MetaWearDevice {
         // memory caches that won't survive the reboot.
         await proto.stop()
         state = .disconnected
-        activeStreamModules.removeAll()
+        activeStreamKeys.removeAll()
+        activeFusionConfig = nil
         loggerRegistry.removeAll()
         logReferenceDate = nil
         // deviceInfo and `modules` describe immutable hardware — preserved so
@@ -218,10 +232,34 @@ public actor MetaWearDevice {
         case .idle, .streaming: break
         default: throw MWError.invalidState("Device must be idle or streaming to add a sensor")
         }
-        try checkSensorConflict(adding: sensor.module)
+        let streamKey = ActiveStreamKey(module: sensor.module, dataRegister: sensor.dataRegister)
+        try checkSensorConflict(adding: streamKey)
+        let moduleWasAlreadyStreaming = activeStreamKeys.contains { $0.module == sensor.module }
+
+        // Sensor fusion runs a single shared engine; a second output (e.g. euler
+        // alongside quaternion) only flips an extra bit in the output-enable
+        // mask — it does not reconfigure the engine. All outputs therefore share
+        // one mode/range. Adding a second output with a different mode would be
+        // silently ignored by the board (the first config wins), so reject it
+        // with a clear error rather than returning a stream that never matches
+        // the requested mode.
+        if sensor.module == .sensorFusion {
+            let newConfig = sensor.configureCommands.first {
+                $0.count >= 2 && $0[0] == MWModule.sensorFusion.rawValue && $0[1] == 0x02
+            }
+            if moduleWasAlreadyStreaming {
+                if let active = activeFusionConfig, let newConfig, active != newConfig {
+                    throw MWError.invalidState(
+                        "Cannot add a sensor-fusion output with a different mode/range than the running fusion engine"
+                    )
+                }
+            } else {
+                activeFusionConfig = newConfig
+            }
+        }
 
         state = .streaming
-        activeStreamModules.insert(sensor.module)
+        activeStreamKeys.insert(streamKey)
 
         // Choose packed register if available and requested
         let register: UInt8
@@ -242,15 +280,25 @@ public actor MetaWearDevice {
             if sensor.warmupDelayNanos > 0 {
                 try await Task.sleep(for: .nanoseconds(sensor.warmupDelayNanos))
             }
-            for cmd in sensor.configureCommands where !cmd.isEmpty { try await proto.write(cmd) }
-            try await proto.write(MWPacket.command(sensor.module, register, [0x01]))
-            for cmd in sensor.enableCommands where !cmd.isEmpty { try await proto.write(cmd) }
-            for cmd in sensor.startCommands  where !cmd.isEmpty { try await proto.write(cmd) }
+            if sensor.module == .sensorFusion, moduleWasAlreadyStreaming {
+                try await proto.write(MWPacket.command(sensor.module, register, [0x01]))
+                if !sensor.enableCommand.isEmpty {
+                    try await proto.write(sensor.enableCommand)
+                }
+            } else {
+                for cmd in sensor.configureCommands where !cmd.isEmpty { try await proto.write(cmd) }
+                try await proto.write(MWPacket.command(sensor.module, register, [0x01]))
+                for cmd in sensor.enableCommands where !cmd.isEmpty { try await proto.write(cmd) }
+                for cmd in sensor.startCommands  where !cmd.isEmpty { try await proto.write(cmd) }
+            }
         } catch {
             // Roll back — the sensor never started. Leaving it marked active
             // would block any retry with "already streaming".
-            activeStreamModules.remove(sensor.module)
-            state = activeStreamModules.isEmpty ? .idle : .streaming
+            activeStreamKeys.remove(streamKey)
+            if !activeStreamKeys.contains(where: { $0.module == .sensorFusion }) {
+                activeFusionConfig = nil
+            }
+            state = activeStreamKeys.isEmpty ? .idle : .streaming
             throw error
         }
 
@@ -297,7 +345,7 @@ public actor MetaWearDevice {
     /// Pair with `teardownSignalSource(_:)` to stop the sensor when done.
     public func prepareSignalSource<S: MWStreamable>(_ sensor: S) async throws {
         mwLog("[Device] prepareSignalSource: \(sensor.module.name)")
-        try checkSensorConflict(adding: sensor.module)
+        try checkSensorConflict(adding: ActiveStreamKey(module: sensor.module, dataRegister: sensor.dataRegister))
         for cmd in sensor.warmupCommands where !cmd.isEmpty { try await proto.write(cmd) }
         if sensor.warmupDelayNanos > 0 {
             try await Task.sleep(for: .nanoseconds(sensor.warmupDelayNanos))
@@ -319,13 +367,23 @@ public actor MetaWearDevice {
     public func stopStreaming<S: MWStreamable>(_ sensor: S) async throws {
         mwLog("[Device] stopStreaming: \(sensor.module.name)")
         guard case .streaming = state else { return }
+        let streamKey = ActiveStreamKey(module: sensor.module, dataRegister: sensor.dataRegister)
+        let remainingKeys = activeStreamKeys.subtracting([streamKey])
+        let hasOtherFusionStreams = sensor.module == .sensorFusion
+            && remainingKeys.contains { $0.module == .sensorFusion }
 
         // C++ equivalent:
         //   mbl_mw_acc_stop                        → stopCommand
         //   mbl_mw_acc_disable_acceleration_sampling → disableCommand
         //   mbl_mw_datasignal_unsubscribe           → [module, register, 0x00]
-        for cmd in sensor.stopCommands    where !cmd.isEmpty { try await proto.write(cmd) }
-        for cmd in sensor.disableCommands where !cmd.isEmpty { try await proto.write(cmd) }
+        if hasOtherFusionStreams {
+            if !sensor.disableCommand.isEmpty {
+                try await proto.write(sensor.disableCommand)
+            }
+        } else {
+            for cmd in sensor.stopCommands    where !cmd.isEmpty { try await proto.write(cmd) }
+            for cmd in sensor.disableCommands where !cmd.isEmpty { try await proto.write(cmd) }
+        }
         try await proto.write(MWPacket.command(sensor.module, sensor.dataRegister, [0x00]))
         if let packed = sensor.packedDataRegister {
             try await proto.write(MWPacket.command(sensor.module, packed, [0x00]))
@@ -334,8 +392,11 @@ public actor MetaWearDevice {
         if let packed = sensor.packedDataRegister {
             await proto.unsubscribe(from: sensor.module, register: packed)
         }
-        activeStreamModules.remove(sensor.module)
-        state = activeStreamModules.isEmpty ? .idle : .streaming
+        activeStreamKeys.remove(streamKey)
+        if !activeStreamKeys.contains(where: { $0.module == .sensorFusion }) {
+            activeFusionConfig = nil
+        }
+        state = activeStreamKeys.isEmpty ? .idle : .streaming
     }
 
     // MARK: - Logging
@@ -634,60 +695,76 @@ public actor MetaWearDevice {
         }
         state = .downloading(progress: 0)
 
-        // Force-flush any partial page sitting in RAM so the LOG_LENGTH read
-        // below reflects every captured sample. Idempotent — safe to call even
-        // if the user already invoked `flushLogPage()` explicitly. No-op on
-        // pre-MMS firmware (revision < 3).
-        _ = try await flushLogPage()
+        do {
+            // Force-flush any partial page sitting in RAM so the LOG_LENGTH read
+            // below reflects every captured sample. Idempotent — safe to call even
+            // if the user already invoked `flushLogPage()` explicitly. No-op on
+            // pre-MMS firmware (revision < 3).
+            _ = try await flushLogPage()
 
-        // Enable readout-notify and progress channels, then read the entry count.
-        try await proto.write(MWPacket.command(.logging, 0x07, [0x01]))  // enable readout notify
-        try await proto.write(MWPacket.command(.logging, 0x0D, [0x01]))  // enable page-completed
-        try await proto.write(MWPacket.command(.logging, 0x08, [0x01]))  // enable progress
+            // Enable readout-notify and progress channels, then read the entry count.
+            try await proto.write(MWPacket.command(.logging, 0x07, [0x01]))  // enable readout notify
+            try await proto.write(MWPacket.command(.logging, 0x0D, [0x01]))  // enable page-completed
+            try await proto.write(MWPacket.command(.logging, 0x08, [0x01]))  // enable progress
 
-        let rawStream      = await proto.subscribe(to: .logging, register: 0x07)
-        let progressStream = await proto.subscribe(to: .logging, register: 0x08)
-        let pageStream     = await proto.subscribe(to: .logging, register: 0x0D)
+            let rawStream      = await proto.subscribe(to: .logging, register: 0x07)
+            let progressStream = await proto.subscribe(to: .logging, register: 0x08)
+            let pageStream     = await proto.subscribe(to: .logging, register: 0x0D)
 
-        // Read entry count, then start the download
-        let lengthResponse = try await proto.read(.logging, 0x05)
-        guard lengthResponse.count >= 6 else {
-            throw MWError.operationFailed("Log length response too short")
-        }
-        let nEntries = MWPacketParser.parseUInt32LE(lengthResponse, offset: 2)
+            // Read entry count, then start the download
+            let lengthResponse = try await proto.read(.logging, 0x05)
+            guard lengthResponse.count >= 6 else {
+                throw MWError.operationFailed("Log length response too short")
+            }
+            let nEntries = MWPacketParser.parseUInt32LE(lengthResponse, offset: 2)
 
-        // Empty log buffer: short-circuit. Issuing the readout with count=0
-        // produces no `0x07` raw entries, no `0x0D` page-completed notice, and
-        // no `0x08` progress update — `runDownload` would block on
-        // `progressStream` forever. Yield a single 100% snapshot with no data
-        // and finish.
-        if nEntries == 0 {
-            state = .idle
+            // Empty log buffer: short-circuit. Issuing the readout with count=0
+            // produces no `0x07` raw entries, no `0x0D` page-completed notice, and
+            // no `0x08` progress update — `runDownload` would block on
+            // `progressStream` forever. Yield a single 100% snapshot with no data
+            // and finish.
+            if nEntries == 0 {
+                await cleanupLogDownloadSetup()
+                state = .idle
+                let (stream, continuation) = AsyncThrowingStream<Download<[RawLogEntry]>, Error>.makeStream()
+                continuation.yield(Download(data: [], percentComplete: 1.0,
+                                            totalEntries: 0, entriesDownloaded: 0))
+                continuation.finish()
+                return stream
+            }
+
+            // Readout: [0x0B, 0x06, n_entries(4 LE), n_notify(4 LE)]
+            // n_notify = 0 means one progress update per page.
+            let cmd = MWPacket.command(.logging, 0x06,
+                                       MWPacketParser.le32(nEntries) + MWPacketParser.le32(0))
+            try await proto.write(cmd)
+
             let (stream, continuation) = AsyncThrowingStream<Download<[RawLogEntry]>, Error>.makeStream()
-            continuation.yield(Download(data: [], percentComplete: 1.0,
-                                        totalEntries: 0, entriesDownloaded: 0))
-            continuation.finish()
+            let downloadTask = Task { [self] in
+                await self.runDownload(
+                    rawStream: rawStream,
+                    progressStream: progressStream,
+                    pageStream: pageStream,
+                    totalEntries: nEntries,
+                    continuation: continuation
+                )
+            }
+            continuation.onTermination = { _ in downloadTask.cancel() }
             return stream
+        } catch {
+            await cleanupLogDownloadSetup()
+            state = .idle
+            throw error
         }
+    }
 
-        // Readout: [0x0B, 0x06, n_entries(4 LE), n_notify(4 LE)]
-        // n_notify = 0 means one progress update per page.
-        let cmd = MWPacket.command(.logging, 0x06,
-                                   MWPacketParser.le32(nEntries) + MWPacketParser.le32(0))
-        try await proto.write(cmd)
-
-        let (stream, continuation) = AsyncThrowingStream<Download<[RawLogEntry]>, Error>.makeStream()
-        let downloadTask = Task { [self] in
-            await self.runDownload(
-                rawStream: rawStream,
-                progressStream: progressStream,
-                pageStream: pageStream,
-                totalEntries: nEntries,
-                continuation: continuation
-            )
-        }
-        continuation.onTermination = { _ in downloadTask.cancel() }
-        return stream
+    private func cleanupLogDownloadSetup() async {
+        try? await proto.write(MWPacket.command(.logging, 0x07, [0x00]))
+        try? await proto.write(MWPacket.command(.logging, 0x0D, [0x00]))
+        try? await proto.write(MWPacket.command(.logging, 0x08, [0x00]))
+        await proto.unsubscribe(from: .logging, register: 0x07)
+        await proto.unsubscribe(from: .logging, register: 0x08)
+        await proto.unsubscribe(from: .logging, register: 0x0D)
     }
 
     /// Download and decode log entries for a specific loggable sensor.
@@ -1294,6 +1371,7 @@ public actor MetaWearDevice {
                     }
                     entryTask.cancel()
                     pageTask.cancel()
+                    await cleanupLogDownloadSetup()
                     state = .idle
                     continuation.finish()
                     return
@@ -1305,11 +1383,13 @@ public actor MetaWearDevice {
             // readout never completed; surface a timeout.
             entryTask.cancel()
             pageTask.cancel()
+            await cleanupLogDownloadSetup()
             state = .idle
             continuation.finish(throwing: MWError.timeout)
         } catch {
             entryTask.cancel()
             pageTask.cancel()
+            await cleanupLogDownloadSetup()
             state = .idle
             continuation.finish(throwing: error)
         }
@@ -1687,7 +1767,8 @@ public actor MetaWearDevice {
     private func handleUnexpectedDisconnect(error: Error) {
         mwLog("[Device] unexpectedDisconnect: \(error.localizedDescription)")
         state = .disconnected
-        activeStreamModules.removeAll()
+        activeStreamKeys.removeAll()
+        activeFusionConfig = nil
         logReferenceDate = nil
         // loggerRegistry is intentionally preserved — the device may still have
         // active loggers. After reconnect the caller can download without re-starting.
@@ -1697,25 +1778,30 @@ public actor MetaWearDevice {
 
     // MARK: - Sensor conflict detection
 
-    /// Throws if the module being added would conflict with currently active streams.
+    /// Throws if the signal being added would conflict with currently active streams.
     /// Rule: sensor fusion and individual IMU sensors (accel/gyro/mag) are mutually exclusive.
-    private func checkSensorConflict(adding module: MWModule) throws {
-        if activeStreamModules.contains(module) {
-            throw MWError.invalidState("\(module.name) is already streaming")
+    private func checkSensorConflict(adding key: ActiveStreamKey) throws {
+        if activeStreamKeys.contains(key) {
+            throw MWError.invalidState("\(key.module.name) register 0x\(String(key.dataRegister, radix: 16)) is already streaming")
         }
         let imuModules: Set<MWModule> = [.accelerometer, .gyro, .magnetometer]
-        let addingFusion = module == .sensorFusion
-        let addingIMU    = imuModules.contains(module)
+        let activeModules = Set(activeStreamKeys.map(\.module))
+        let addingFusion = key.module == .sensorFusion
+        let addingIMU    = imuModules.contains(key.module)
 
-        if addingFusion && !activeStreamModules.isDisjoint(with: imuModules) {
-            let active = activeStreamModules.intersection(imuModules).map { "\($0)" }.joined(separator: ", ")
+        if !addingFusion && activeModules.contains(key.module) {
+            throw MWError.invalidState("\(key.module.name) is already streaming")
+        }
+
+        if addingFusion && !activeModules.isDisjoint(with: imuModules) {
+            let active = activeModules.intersection(imuModules).map { "\($0)" }.joined(separator: ", ")
             throw MWError.invalidState(
                 "Cannot start sensor fusion while \(active) is already streaming"
             )
         }
-        if addingIMU && activeStreamModules.contains(.sensorFusion) {
+        if addingIMU && activeModules.contains(.sensorFusion) {
             throw MWError.invalidState(
-                "Cannot stream \(module.name) while sensor fusion is active"
+                "Cannot stream \(key.module.name) while sensor fusion is active"
             )
         }
     }
@@ -1790,5 +1876,3 @@ private actor DownloadActivityMonitor {
     func bump() { last = ContinuousClock.now }
     func idleDuration() -> Duration { ContinuousClock.now - last }
 }
-
-

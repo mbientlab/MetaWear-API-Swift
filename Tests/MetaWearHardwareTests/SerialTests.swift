@@ -32,7 +32,7 @@ struct SerialTests {
             }
             // Write 0x00 to register 0x00 of I2C address 0x68.
             // This is a no-op on most sensors; the board will ACK or NAK silently.
-            let cmd = MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x00, data: [0x00])
+            let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x00, data: [0x00])
             try await device.send(cmd)
             print("\n  ✓ I2C write sent without error\n")
         }

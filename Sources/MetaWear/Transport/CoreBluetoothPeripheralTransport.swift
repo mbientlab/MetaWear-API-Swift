@@ -179,18 +179,15 @@ actor CoreBluetoothPeripheralTransport: NSObject, BLETransport {
         disconnectContinuation?.resume()
         disconnectContinuation = nil
 
-        peripheral = nil
+        failInFlightOperations(throwing: error)
+        clearConnectionState()
     }
 
     func handleDisconnected(error: Error?) {
         mwLog("[BLE] PeripheralTransport handleDisconnected: error=\(error?.localizedDescription ?? "nil")")
         let err = error ?? MWError.operationFailed("Disconnected from \(identifier)")
 
-        for continuation in notifyContinuations.values { continuation.finish(throwing: err) }
-        notifyContinuations.removeAll()
-
-        for continuation in readContinuations.values { continuation.resume(throwing: err) }
-        readContinuations.removeAll()
+        failInFlightOperations(throwing: err)
 
         connectContinuation?.resume(throwing: err)
         connectContinuation = nil
@@ -198,13 +195,31 @@ actor CoreBluetoothPeripheralTransport: NSObject, BLETransport {
         disconnectContinuation?.resume()
         disconnectContinuation = nil
 
+        clearConnectionState()
+    }
+
+    // MARK: - Private helpers
+
+    private func failInFlightOperations(throwing error: Error) {
+        for continuation in notifyContinuations.values { continuation.finish(throwing: error) }
+        notifyContinuations.removeAll()
+
+        for continuation in readContinuations.values { continuation.resume(throwing: error) }
+        readContinuations.removeAll()
+
+        for continuation in writeContinuations.values { continuation.resume(throwing: error) }
+        writeContinuations.removeAll()
+
+        rssiContinuation?.resume(throwing: error)
+        rssiContinuation = nil
+    }
+
+    private func clearConnectionState() {
         characteristics.removeAll()
         pendingServiceDiscoveries.removeAll()
         writeQueue.removeAll()
         peripheral = nil
     }
-
-    // MARK: - Private helpers
 
     private func beginNotifications(
         characteristic: CBUUID,
@@ -340,8 +355,19 @@ extension CoreBluetoothPeripheralTransport: CBPeripheralDelegate {
     }
 
     private func failConnect(error: Error) {
+        mwLog("[BLE] failConnect: \(error.localizedDescription)")
         connectContinuation?.resume(throwing: error)
         connectContinuation = nil
+
+        disconnectContinuation?.resume()
+        disconnectContinuation = nil
+
+        failInFlightOperations(throwing: error)
+        clearConnectionState()
+
+        Task {
+            await centralManager.requestDisconnect(identifier: self.identifier)
+        }
     }
 
     private func handleValueUpdate(uuid: CBUUID, data: Data) {

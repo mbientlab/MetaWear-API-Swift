@@ -166,10 +166,17 @@ public struct MWSensorFusionCalibrationData: Sendable, Equatable {
     /// 10-byte magnetometer calibration blob.
     public let mag: [UInt8]
 
-    public init(acc: [UInt8], gyro: [UInt8], mag: [UInt8]) {
-        precondition(acc.count  == 10, "acc calibration data must be 10 bytes")
-        precondition(gyro.count == 10, "gyro calibration data must be 10 bytes")
-        precondition(mag.count  == 10, "mag calibration data must be 10 bytes")
+    /// - Throws: `MWError.operationFailed` if any blob is not exactly 10 bytes.
+    public init(acc: [UInt8], gyro: [UInt8], mag: [UInt8]) throws {
+        guard acc.count == 10 else {
+            throw MWError.operationFailed("acc calibration data must be 10 bytes; got \(acc.count)")
+        }
+        guard gyro.count == 10 else {
+            throw MWError.operationFailed("gyro calibration data must be 10 bytes; got \(gyro.count)")
+        }
+        guard mag.count == 10 else {
+            throw MWError.operationFailed("mag calibration data must be 10 bytes; got \(mag.count)")
+        }
         self.acc = acc
         self.gyro = gyro
         self.mag = mag
@@ -792,8 +799,11 @@ public struct MWSensorFusionResetOrientation: MWCommand {
 /// sensor fusion revision >= 2 (CALIB_DATA_REVISION) and firmware v1.4.3+.
 public struct MWSensorFusionWriteAccCalibration: MWCommand {
     public let data: [UInt8]
-    public init(_ data: [UInt8]) {
-        precondition(data.count == 10, "acc calibration data must be 10 bytes")
+    /// - Throws: `MWError.operationFailed` if `data` is not exactly 10 bytes.
+    public init(_ data: [UInt8]) throws {
+        guard data.count == 10 else {
+            throw MWError.operationFailed("acc calibration data must be 10 bytes; got \(data.count)")
+        }
         self.data = data
     }
     public var commandData: Data {
@@ -804,8 +814,11 @@ public struct MWSensorFusionWriteAccCalibration: MWCommand {
 /// Write gyroscope calibration data (10 bytes). Register 0x0D.
 public struct MWSensorFusionWriteGyroCalibration: MWCommand {
     public let data: [UInt8]
-    public init(_ data: [UInt8]) {
-        precondition(data.count == 10, "gyro calibration data must be 10 bytes")
+    /// - Throws: `MWError.operationFailed` if `data` is not exactly 10 bytes.
+    public init(_ data: [UInt8]) throws {
+        guard data.count == 10 else {
+            throw MWError.operationFailed("gyro calibration data must be 10 bytes; got \(data.count)")
+        }
         self.data = data
     }
     public var commandData: Data {
@@ -816,8 +829,11 @@ public struct MWSensorFusionWriteGyroCalibration: MWCommand {
 /// Write magnetometer calibration data (10 bytes). Register 0x0E.
 public struct MWSensorFusionWriteMagCalibration: MWCommand {
     public let data: [UInt8]
-    public init(_ data: [UInt8]) {
-        precondition(data.count == 10, "mag calibration data must be 10 bytes")
+    /// - Throws: `MWError.operationFailed` if `data` is not exactly 10 bytes.
+    public init(_ data: [UInt8]) throws {
+        guard data.count == 10 else {
+            throw MWError.operationFailed("mag calibration data must be 10 bytes; got \(data.count)")
+        }
         self.data = data
     }
     public var commandData: Data {

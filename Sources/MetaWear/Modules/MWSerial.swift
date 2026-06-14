@@ -33,7 +33,7 @@ import Foundation
 /// Use the `MetaWearDevice` convenience methods for reads; use the command structs
 /// for writes:
 /// ```swift
-/// try await device.send(MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0x00]))
+/// try await device.send(try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0x00]))
 /// let bytes = try await device.i2cRead(deviceAddress: 0x68, registerAddress: 0x75, length: 1, id: 0)
 /// ```
 public enum MWSerial {
@@ -56,7 +56,21 @@ public enum MWSerial {
         /// Payload bytes to send after the register address.
         public let data: [UInt8]
 
-        public init(deviceAddress: UInt8, registerAddress: UInt8, data: [UInt8]) {
+        /// Firmware payload limit for a single I2C write. The register table
+        /// documents "Data Length (max 10)" — the on-wire length field is a byte,
+        /// but the firmware only buffers 10 data bytes per write.
+        public static let maxPayloadLength = 10
+
+        /// - Throws: `MWError.operationFailed` if `data` exceeds
+        ///   ``maxPayloadLength``. Bad input is surfaced as a recoverable error
+        ///   rather than a `precondition` so a malformed call cannot crash the
+        ///   host app.
+        public init(deviceAddress: UInt8, registerAddress: UInt8, data: [UInt8]) throws {
+            guard data.count <= Self.maxPayloadLength else {
+                throw MWError.operationFailed(
+                    "I2C write payload is \(data.count) bytes; firmware maximum is \(Self.maxPayloadLength)"
+                )
+            }
             self.deviceAddress = deviceAddress
             self.registerAddress = registerAddress
             self.data = data
@@ -66,7 +80,7 @@ public enum MWSerial {
             Data([MWModule.serial.rawValue, 0x01,
                   deviceAddress, registerAddress,
                   0xFF,
-                  UInt8(min(data.count, 0xFF))]
+                  UInt8(data.count)]
                  + data)
         }
     }
@@ -187,6 +201,9 @@ public extension MetaWearDevice {
                  registerAddress: UInt8,
                  length: UInt8,
                  id: UInt8 = 0) async throws -> Data {
+        guard length > 0 else {
+            throw MWError.operationFailed("I2C read length must be in 1...255")
+        }
         // Request: [0x0D, 0xC1, dev, reg, id, length]
         // 0xC1 = 0x01 | 0x80 (read bit) | 0x40 (data_id bit)
         let cmd = Data([MWModule.serial.rawValue, UInt8(0x01 | 0x80 | 0x40),
@@ -218,8 +235,14 @@ public extension MetaWearDevice {
                  length: UInt8,
                  id: UInt8 = 0,
                  writeData: [UInt8] = []) async throws -> Data {
+        guard (1...16).contains(length) else {
+            throw MWError.operationFailed("SPI read length must be in 1...16")
+        }
+        guard id <= 0x0F else {
+            throw MWError.operationFailed("SPI read id must be in 0...15")
+        }
         // length and id share one byte: (length-1) in low nibble, id in high nibble.
-        let packedLenId: UInt8 = ((length &- 1) & 0x0F) | ((id & 0x0F) << 4)
+        let packedLenId: UInt8 = (length - 1) | (id << 4)
         // Request: [0x0D, 0xC2, fields(5), packedLenId, writeData...]
         let cmd = Data([MWModule.serial.rawValue, UInt8(0x02 | 0x80 | 0x40)]
                        + parameters.encodedBytes

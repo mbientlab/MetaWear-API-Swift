@@ -573,25 +573,25 @@ struct BMI270FeatureCommandTests {
 
     // MARK: No-motion
 
-    @Test func noMotion_configure_defaults() {
+    @Test func noMotion_configure_defaults() throws {
         // duration=5 → d0=0x05, d1 (hi=0) | xyz select bits = 0xE0
         // threshold=0xAA → t0=0xAA, t1=0x00
-        let cfg = MWAccelerometerBMI270Features.ConfigureNoMotion()
+        let cfg = try MWAccelerometerBMI270Features.ConfigureNoMotion()
         #expect(cfg.commandData == Data([0x03, 0x08, 0x02, 0x05, 0xE0, 0xAA, 0x00]))
     }
 
-    @Test func noMotion_configure_largeDuration_andThreshold() {
+    @Test func noMotion_configure_largeDuration_andThreshold() throws {
         // duration=0x0123 → d0=0x23, d1 hi=0x01 | 0xE0 = 0xE1
         // threshold=0x0456 → t0=0x56, t1=0x04
-        let cfg = MWAccelerometerBMI270Features.ConfigureNoMotion(
+        let cfg = try MWAccelerometerBMI270Features.ConfigureNoMotion(
             duration: 0x0123, threshold: 0x0456
         )
         #expect(cfg.commandData == Data([0x03, 0x08, 0x02, 0x23, 0xE1, 0x56, 0x04]))
     }
 
-    @Test func noMotion_configure_noAxisSelect() {
+    @Test func noMotion_configure_noAxisSelect() throws {
         // all axes off → d1 hi bits zero
-        let cfg = MWAccelerometerBMI270Features.ConfigureNoMotion(
+        let cfg = try MWAccelerometerBMI270Features.ConfigureNoMotion(
             duration: 5, threshold: 0xAA,
             selectX: false, selectY: false, selectZ: false
         )
@@ -641,37 +641,37 @@ struct BMI270FeatureCommandTests {
 
     // MARK: Downsampling
 
-    @Test func downsampling_allZeros() {
-        let cmd = MWAccelerometerBMI270Features.SetDownsampling()
+    @Test func downsampling_allZeros() throws {
+        let cmd = try MWAccelerometerBMI270Features.SetDownsampling()
         #expect(cmd.commandData == Data([0x03, 0x11, 0x00]))
     }
 
-    @Test func downsampling_gyroOrdinalOnly() {
-        let cmd = MWAccelerometerBMI270Features.SetDownsampling(gyroOrdinal: 3)
+    @Test func downsampling_gyroOrdinalOnly() throws {
+        let cmd = try MWAccelerometerBMI270Features.SetDownsampling(gyroOrdinal: 3)
         // bits 0-2 = 0b011
         #expect(cmd.commandData == Data([0x03, 0x11, 0x03]))
     }
 
-    @Test func downsampling_accOrdinalOnly() {
-        let cmd = MWAccelerometerBMI270Features.SetDownsampling(accOrdinal: 5)
+    @Test func downsampling_accOrdinalOnly() throws {
+        let cmd = try MWAccelerometerBMI270Features.SetDownsampling(accOrdinal: 5)
         // bits 4-6 = 0b101 → 0x50
         #expect(cmd.commandData == Data([0x03, 0x11, 0x50]))
     }
 
-    @Test func downsampling_allFieldsSet() {
+    @Test func downsampling_allFieldsSet() throws {
         // gyroOrdinal=7 → bits 0-2 = 0x07
         // gyroFilter   → bit 3 = 0x08
         // accOrdinal=7 → bits 4-6 = 0x70
         // accFilter    → bit 7 = 0x80
-        let cmd = MWAccelerometerBMI270Features.SetDownsampling(
+        let cmd = try MWAccelerometerBMI270Features.SetDownsampling(
             gyroOrdinal: 7, gyroFilterData: true,
             accOrdinal: 7,  accFilterData: true
         )
         #expect(cmd.commandData == Data([0x03, 0x11, 0xFF]))
     }
 
-    @Test func downsampling_onlyFilters() {
-        let cmd = MWAccelerometerBMI270Features.SetDownsampling(
+    @Test func downsampling_onlyFilters() throws {
+        let cmd = try MWAccelerometerBMI270Features.SetDownsampling(
             gyroFilterData: true, accFilterData: true
         )
         #expect(cmd.commandData == Data([0x03, 0x11, 0x88]))
@@ -1174,22 +1174,22 @@ struct SensorFusionCommandTests {
         #expect(cmd.commandData == Data([0x19, 0x0F, 0x01]))
     }
 
-    @Test func writeAccCalibration_command_matchesRev2Python() {
+    @Test func writeAccCalibration_command_matchesRev2Python() throws {
         // test_sensor_fusion.py::TestSensorFusionRev2::test_write_calibration_data (NDOF)
         let bytes: [UInt8] = [0xf6, 0xff, 0x00, 0x00, 0x0a, 0x00, 0xe8, 0x03, 0x03, 0x00]
-        let cmd = MWSensorFusionWriteAccCalibration(bytes)
+        let cmd = try MWSensorFusionWriteAccCalibration(bytes)
         #expect(cmd.commandData == Data([0x19, 0x0C] + bytes))
     }
 
-    @Test func writeGyroCalibration_command_matchesRev2Python() {
+    @Test func writeGyroCalibration_command_matchesRev2Python() throws {
         let bytes: [UInt8] = [0x04, 0x00, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00]
-        let cmd = MWSensorFusionWriteGyroCalibration(bytes)
+        let cmd = try MWSensorFusionWriteGyroCalibration(bytes)
         #expect(cmd.commandData == Data([0x19, 0x0D] + bytes))
     }
 
-    @Test func writeMagCalibration_command_matchesRev2Python() {
+    @Test func writeMagCalibration_command_matchesRev2Python() throws {
         let bytes: [UInt8] = [0x66, 0x00, 0x17, 0xfd, 0x8a, 0xfc, 0x7f, 0x03, 0x01, 0x00]
-        let cmd = MWSensorFusionWriteMagCalibration(bytes)
+        let cmd = try MWSensorFusionWriteMagCalibration(bytes)
         #expect(cmd.commandData == Data([0x19, 0x0E] + bytes))
     }
 

@@ -155,8 +155,10 @@ enum MWAnonymousSignalScheme {
         switch type {
         case 0x01: return "passthrough"
         case 0x02:
-            // Mode byte in config[0]: 0x00 = accumulate, 0x01 = count.
-            return (config.first ?? 0) == 0x01 ? "count" : "accumulate"
+            // AccumulatorConfig packs mode into bits 4-6 of config[0]:
+            // 0 = accumulate, 1 = count. Low bits describe output/input size.
+            let mode = ((config.first ?? 0) >> 4) & 0x07
+            return mode == 0x01 ? "count" : "accumulate"
         case 0x03:
             // Average filter: bit 0 of mode indicates high-pass.
             let mode = config.count > 1 ? config[1] : 0
@@ -164,9 +166,9 @@ enum MWAnonymousSignalScheme {
         case 0x06: return "comparison"
         case 0x07:
             // RMS vs. RSS: distinguished by the mode byte at config[1].
-            // 0x07 = RMS, 0x0B = RSS.
-            let mode = config.count > 1 ? config[1] : 0x07
-            return mode == 0x0B ? "rss" : "rms"
+            // 0 = RMS, 1 = RSS.
+            let mode = config.count > 1 ? config[1] : 0x00
+            return mode == 0x01 ? "rss" : "rms"
         case 0x08: return "time"
         case 0x09: return "math"
         case 0x0A: return "delay"

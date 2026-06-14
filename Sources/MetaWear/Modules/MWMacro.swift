@@ -46,9 +46,9 @@ public struct MWMacro: Sendable, Equatable {
 /// ```swift
 /// let macro = try await device.recordMacro(executeOnBoot: true) { recorder in
 ///     await recorder.send(MWLED.SetPattern(color: .green, .flash))
-///     await recorder.createEvent(
+///     try await recorder.createEvent(
 ///         source: .buttonChanged(),
-///         action: MWEventAction(command: MWLED.Play())
+///         action: try MWEventAction(command: MWLED.Play())
 ///     )
 /// }
 /// ```
@@ -118,11 +118,16 @@ public actor MWMacroRecorder {
     ///   - source: The signal whose notification triggers the action.
     ///   - action: The command to execute when the source fires.
     ///   - dataToken: Optional source→destination byte slicing instructions.
+    /// - Throws: `MWError.operationFailed` if the action parameter payload is too
+    ///   large to fit in the ENTRY command's one-byte length field.
     public func createEvent(
         source: MWEventSource,
         action: MWEventAction,
         dataToken: MWEventDataToken? = nil
-    ) {
+    ) throws {
+        guard action.params.count <= Int(UInt8.max) else {
+            throw MWError.operationFailed("Event action parameter payload cannot exceed 255 bytes")
+        }
         // ENTRY: [0x0A, 0x02, src_module, src_register, src_dataID,
         //                      dst_module, dst_register, param_length,
         //                      (optional 2-byte data token)]
@@ -163,9 +168,9 @@ public extension MetaWearDevice {
     /// // Bind button → LED green flash, persisted across reboots
     /// let macro = try await device.recordMacro(executeOnBoot: true) { recorder in
     ///     await recorder.send(MWLED.SetPattern(color: .green, .flash))
-    ///     await recorder.createEvent(
+    ///     try await recorder.createEvent(
     ///         source: .buttonChanged(),
-    ///         action: MWEventAction(command: MWLED.Play())
+    ///         action: try MWEventAction(command: MWLED.Play())
     ///     )
     /// }
     /// ```

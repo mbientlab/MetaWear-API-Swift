@@ -104,22 +104,22 @@ struct EventSourceTests {
 @Suite("MWEventAction — From Command")
 struct EventActionTests {
 
-    @Test func ledPlay_extractsCorrectly() {
-        let action = MWEventAction(command: MWLED.Play())
+    @Test func ledPlay_extractsCorrectly() throws {
+        let action = try MWEventAction(command: MWLED.Play())
         #expect(action.module == .led)
         #expect(action.register == 0x01)
         #expect(action.params == Data([0x01]))
     }
 
-    @Test func ledStop_extractsCorrectly() {
-        let action = MWEventAction(command: MWLED.Stop(clearPattern: true))
+    @Test func ledStop_extractsCorrectly() throws {
+        let action = try MWEventAction(command: MWLED.Stop(clearPattern: true))
         #expect(action.module == .led)
         #expect(action.register == 0x02)
         #expect(action.params == Data([0x01]))
     }
 
-    @Test func gpioSetHigh_extractsCorrectly() {
-        let action = MWEventAction(command: MWGPIO.SetHigh(pin: 2))
+    @Test func gpioSetHigh_extractsCorrectly() throws {
+        let action = try MWEventAction(command: MWGPIO.SetHigh(pin: 2))
         #expect(action.module == .gpio)
         #expect(action.register == 0x01)
         #expect(action.params == Data([0x02]))
@@ -144,7 +144,7 @@ struct CreateEventCommandTests {
         _ = try await makeEvent(
             on: device, transport: transport,
             source: .timerFired(timer),
-            action: MWEventAction(command: MWLED.Play()),
+            action: try MWEventAction(command: MWLED.Play()),
             boardEventID: 0
         )
 
@@ -172,7 +172,7 @@ struct CreateEventCommandTests {
         _ = try await makeEvent(
             on: device, transport: transport,
             source: .timerFired(timer),
-            action: MWEventAction(command: MWLED.Play()),
+            action: try MWEventAction(command: MWLED.Play()),
             boardEventID: 0
         )
 
@@ -206,7 +206,7 @@ struct CreateEventCommandTests {
         let event = try await makeEvent(
             on: device, transport: transport,
             source: .buttonChanged(),
-            action: MWEventAction(command: MWLED.Play()),
+            action: try MWEventAction(command: MWLED.Play()),
             boardEventID: 5
         )
         #expect(event.id == 5)
@@ -218,7 +218,7 @@ struct CreateEventCommandTests {
         _ = try await makeEvent(
             on: device, transport: transport,
             source: .buttonChanged(),
-            action: MWEventAction(command: MWGPIO.SetHigh(pin: 0)),
+            action: try MWEventAction(command: MWGPIO.SetHigh(pin: 0)),
             boardEventID: 0
         )
 
@@ -267,7 +267,7 @@ struct EventIntegrationTests {
         let event = try await makeEvent(
             on: device, transport: transport,
             source: .timerFired(timer),
-            action: MWEventAction(command: MWLED.Play()),
+            action: try MWEventAction(command: MWLED.Play()),
             boardEventID: 0
         )
 
@@ -292,42 +292,49 @@ struct EventDataTokenTests {
 
     // encodedBytes = [0x01 | (length << 1) | (sourceOffset << 4), destOffset]
     // length=1, sourceOffset=0, destOffset=0 → [0x01 | 0x02 | 0x00, 0x00] = [0x03, 0x00]
-    @Test func minimal_lengthOne() {
-        let t = MWEventDataToken(length: 1)
+    @Test func minimal_lengthOne() throws {
+        let t = try MWEventDataToken(length: 1)
         #expect(t.encodedBytes == [0x03, 0x00])
     }
 
     // length=4, sourceOffset=2, destOffset=3
     //   byte0 = 0x01 | (4 << 1) | (2 << 4) = 0x01 | 0x08 | 0x20 = 0x29
     //   byte1 = 0x03
-    @Test func midRange_bitsLineUp() {
-        let t = MWEventDataToken(length: 4, sourceOffset: 2, destOffset: 3)
+    @Test func midRange_bitsLineUp() throws {
+        let t = try MWEventDataToken(length: 4, sourceOffset: 2, destOffset: 3)
         #expect(t.encodedBytes == [0x29, 0x03])
     }
 
     // Max legal values: length=7 (bits 1-3 full), sourceOffset=15 (bits 4-7 full)
     //   byte0 = 0x01 | (7 << 1) | (15 << 4) = 0x01 | 0x0E | 0xF0 = 0xFF
-    @Test func maxValues_packIntoAllHigherBits() {
-        let t = MWEventDataToken(length: 7, sourceOffset: 15, destOffset: 0xAB)
+    @Test func maxValues_packIntoAllHigherBits() throws {
+        let t = try MWEventDataToken(length: 7, sourceOffset: 15, destOffset: 0xAB)
         #expect(t.encodedBytes == [0xFF, 0xAB])
     }
 
     // Bit 0 is always set — it's the "token present" marker.
-    @Test func bitZero_alwaysSet() {
+    @Test func bitZero_alwaysSet() throws {
         for length in UInt8(1)...UInt8(7) {
             for srcOff in UInt8(0)...UInt8(15) {
-                let t = MWEventDataToken(length: length, sourceOffset: srcOff, destOffset: 0)
+                let t = try MWEventDataToken(length: length, sourceOffset: srcOff, destOffset: 0)
                 #expect(t.encodedBytes[0] & 0x01 == 0x01)
             }
         }
     }
 
     // destOffset is written verbatim (no packing).
-    @Test func destOffset_verbatim() {
+    @Test func destOffset_verbatim() throws {
         for d in UInt8(0)...UInt8(16) {
-            let t = MWEventDataToken(length: 1, sourceOffset: 0, destOffset: d)
+            let t = try MWEventDataToken(length: 1, sourceOffset: 0, destOffset: d)
             #expect(t.encodedBytes[1] == d)
         }
+    }
+
+    // Out-of-range length / sourceOffset throw rather than crashing via precondition.
+    @Test func outOfRange_throws() {
+        #expect(throws: MWError.self) { _ = try MWEventDataToken(length: 0) }
+        #expect(throws: MWError.self) { _ = try MWEventDataToken(length: 8) }
+        #expect(throws: MWError.self) { _ = try MWEventDataToken(length: 1, sourceOffset: 16) }
     }
 }
 
@@ -343,7 +350,7 @@ struct CreateEventDataTokenTests {
         _ = try await makeEvent(
             on: device, transport: transport,
             source: .buttonChanged(),
-            action: MWEventAction(command: MWLED.Play()),
+            action: try MWEventAction(command: MWLED.Play()),
             boardEventID: 0
         )
         let cmds = await transport.writtenCommands
@@ -354,7 +361,7 @@ struct CreateEventDataTokenTests {
     // With a token, the ENTRY command is 10 bytes (8 baseline + 2 token bytes).
     @Test func withToken_entryAppendsTwoBytes() async throws {
         let (device, transport) = try await connectedDevice()
-        let token = MWEventDataToken(length: 4, sourceOffset: 2, destOffset: 3)
+        let token = try MWEventDataToken(length: 4, sourceOffset: 2, destOffset: 3)
 
         let injector = Task {
             try? await Task.sleep(nanoseconds: 5_000_000)
@@ -364,7 +371,7 @@ struct CreateEventDataTokenTests {
         defer { injector.cancel() }
         _ = try await device.createEvent(
             source: .buttonChanged(),
-            action: MWEventAction(command: MWLED.Play()),
+            action: try MWEventAction(command: MWLED.Play()),
             dataToken: token
         )
 
@@ -382,7 +389,7 @@ struct CreateEventDataTokenTests {
     // CMD_PARAMETERS is still sent exactly as before — the token lives on ENTRY only.
     @Test func withToken_cmdParametersUnchanged() async throws {
         let (device, transport) = try await connectedDevice()
-        let token = MWEventDataToken(length: 1)
+        let token = try MWEventDataToken(length: 1)
 
         let injector = Task {
             try? await Task.sleep(nanoseconds: 5_000_000)
@@ -392,7 +399,7 @@ struct CreateEventDataTokenTests {
         defer { injector.cancel() }
         _ = try await device.createEvent(
             source: .buttonChanged(),
-            action: MWEventAction(command: MWLED.Play()),
+            action: try MWEventAction(command: MWLED.Play()),
             dataToken: token
         )
 

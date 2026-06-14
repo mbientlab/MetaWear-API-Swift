@@ -1130,15 +1130,21 @@ public enum MWAccelerometerBMI270Features {
         ///   - selectX:   Include X axis in the check. Default `true`.
         ///   - selectY:   Include Y axis in the check. Default `true`.
         ///   - selectZ:   Include Z axis in the check. Default `true`.
+        /// - Throws: `MWError.operationFailed` if `duration` or `threshold`
+        ///   exceed the bit-widths the no-motion register allows.
         public init(
             duration: UInt16 = 5,
             threshold: UInt16 = 0xAA,
             selectX: Bool = true,
             selectY: Bool = true,
             selectZ: Bool = true
-        ) {
-            precondition(duration  <= 0x1FFF, "duration must fit in 13 bits")
-            precondition(threshold <= 0x07FF, "threshold must fit in 11 bits")
+        ) throws {
+            guard duration <= 0x1FFF else {
+                throw MWError.operationFailed("no-motion duration must fit in 13 bits (0...0x1FFF); got \(duration)")
+            }
+            guard threshold <= 0x07FF else {
+                throw MWError.operationFailed("no-motion threshold must fit in 11 bits (0...0x7FF); got \(threshold)")
+            }
             self.duration  = duration
             self.threshold = threshold
             self.selectX   = selectX
@@ -1275,14 +1281,20 @@ public enum MWAccelerometerBMI270Features {
         ///   - gyroFilterData: Filter gyro FIFO data. Default `false`.
         ///   - accOrdinal:     Accelerometer downsample exponent (0…7). Default 0 (no downsampling).
         ///   - accFilterData:  Filter accelerometer FIFO data. Default `false`.
+        /// - Throws: `MWError.operationFailed` if either downsample ordinal
+        ///   exceeds the 3-bit field the FIFO-config register allows.
         public init(
             gyroOrdinal: UInt8 = 0,
             gyroFilterData: Bool = false,
             accOrdinal: UInt8 = 0,
             accFilterData: Bool = false
-        ) {
-            precondition(gyroOrdinal <= 7, "gyroOrdinal must fit in 3 bits (0...7)")
-            precondition(accOrdinal  <= 7, "accOrdinal must fit in 3 bits (0...7)")
+        ) throws {
+            guard gyroOrdinal <= 7 else {
+                throw MWError.operationFailed("gyroOrdinal must fit in 3 bits (0...7); got \(gyroOrdinal)")
+            }
+            guard accOrdinal <= 7 else {
+                throw MWError.operationFailed("accOrdinal must fit in 3 bits (0...7); got \(accOrdinal)")
+            }
             self.gyroOrdinal    = gyroOrdinal
             self.gyroFilterData = gyroFilterData
             self.accOrdinal     = accOrdinal

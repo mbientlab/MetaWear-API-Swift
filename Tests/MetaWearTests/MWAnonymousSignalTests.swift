@@ -274,12 +274,12 @@ struct SchemeRootIdentifierTests {
 struct SchemeProcessorSegmentTests {
 
     @Test func rms_simple() {
-        let s = MWAnonymousSignalScheme.processorSegment(type: 0x07, id: 0, config: [0xA5, 0x07])
+        let s = MWAnonymousSignalScheme.processorSegment(type: 0x07, id: 0, config: [0xA5, 0x00])
         #expect(s == "rms?id=0")
     }
 
     @Test func rss_byConfigMode() {
-        let s = MWAnonymousSignalScheme.processorSegment(type: 0x07, id: 0, config: [0xA5, 0x0B])
+        let s = MWAnonymousSignalScheme.processorSegment(type: 0x07, id: 0, config: [0xA5, 0x01])
         #expect(s == "rss?id=0")
     }
 
@@ -289,8 +289,13 @@ struct SchemeProcessorSegmentTests {
     }
 
     @Test func count_byConfigMode() {
-        let s = MWAnonymousSignalScheme.processorSegment(type: 0x02, id: 1, config: [0x01])
+        let s = MWAnonymousSignalScheme.processorSegment(type: 0x02, id: 1, config: [0x10])
         #expect(s == "count?id=1")
+    }
+
+    @Test func accumulate_usesModeBitsNotSizeBits() {
+        let s = MWAnonymousSignalScheme.processorSegment(type: 0x02, id: 1, config: [0x01])
+        #expect(s == "accumulate?id=1")
     }
 
     @Test func lowpass_vs_highpass() {

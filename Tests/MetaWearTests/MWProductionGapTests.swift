@@ -224,6 +224,27 @@ struct SensorConflictTests {
         #expect(await device.state == .streaming)
     }
 
+    @Test func sensorFusionOutputs_canStreamTogether() async throws {
+        let (device, transport) = try await makeConnectedDevice()
+        let quaternion = MWSensorFusionQuaternion()
+        let euler = MWSensorFusionEuler()
+
+        _ = try await device.startStream(quaternion, usePacked: false)
+        _ = try await device.startStream(euler, usePacked: false)
+
+        #expect(await device.state == .streaming)
+
+        let beforeStop = await transport.writtenData.count
+        try await device.stopStreaming(quaternion)
+        let afterStop = await transport.writtenData
+        let stopCommands = afterStop.dropFirst(beforeStop).map(\.0)
+
+        #expect(stopCommands.contains(Data([0x19, 0x03, 0x00, 0x08])))
+        #expect(!stopCommands.contains(Data([0x19, 0x01, 0x00])))
+        #expect(!stopCommands.contains(Data([0x19, 0x03, 0x00, 0x7F])))
+        #expect(await device.state == .streaming)
+    }
+
     @Test func stopStreaming_allowsFusionAfterIMU() async throws {
         let (device, _) = try await makeConnectedDevice()
 
@@ -541,7 +562,7 @@ struct SettingsCommandTests {
     }
 
     @Test func addWhitelistAddress_randomType() throws {
-        let addr = MWSettings.BluetoothAddress(
+        let addr = try MWSettings.BluetoothAddress(
             type: .random,
             bytesLSBFirst: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06]
         )

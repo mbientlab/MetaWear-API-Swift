@@ -542,25 +542,31 @@ struct MWDataProcessorFuserTests {
     // Expected full command:
     //   [0x09, 0x02, 0x03, 0x04, 0xFF, 0xA0, 0x1B, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
     // Config: count=1, references[0]=0, rest 0 (13 bytes total).
-    @Test func fuser_singleReference_configBytes() {
-        let config = MWDataProcessor.Fuser(bufferIDs: [0])
+    @Test func fuser_singleReference_configBytes() throws {
+        let config = try MWDataProcessor.Fuser(bufferIDs: [0])
         let bytes = config.configBytes(inputLength: 6, inputChannels: 3, inputSigned: true)
         let expected: [UInt8] = [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
         #expect(bytes == expected)
     }
 
-    @Test func fuser_twoReferences_configBytes() {
-        let config = MWDataProcessor.Fuser(bufferIDs: [3, 5])
+    @Test func fuser_twoReferences_configBytes() throws {
+        let config = try MWDataProcessor.Fuser(bufferIDs: [3, 5])
         let bytes = config.configBytes(inputLength: 6, inputChannels: 3, inputSigned: true)
         // count=2, refs[0]=3, refs[1]=5, rest 0 — 13 bytes total.
         let expected: [UInt8] = [0x02, 0x03, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
         #expect(bytes == expected)
     }
 
-    @Test func fuser_configBytes_alwaysThirteenBytes() {
-        let config = MWDataProcessor.Fuser(bufferIDs: [])
+    @Test func fuser_configBytes_alwaysThirteenBytes() throws {
+        let config = try MWDataProcessor.Fuser(bufferIDs: [])
         let bytes = config.configBytes(inputLength: 6, inputChannels: 3, inputSigned: true)
         #expect(bytes.count == 13)
         #expect(bytes[0] == 0)
+    }
+
+    @Test func fuser_rejectsMoreThanTwelveReferences() {
+        #expect(throws: MWError.self) {
+            _ = try MWDataProcessor.Fuser(bufferIDs: Array(repeating: 0, count: 13))
+        }
     }
 }

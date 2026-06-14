@@ -12,10 +12,10 @@
 //
 //    1. Import it `@preconcurrency` so its types cross our actor boundaries
 //       without warnings.
-//    2. Declare this adapter `@unchecked Sendable` because the only mutable
-//       state (`continuation`, `controller`) is written once in `run(...)`
-//       before the Nordic queue starts firing delegates, and only read after
-//       that. The library's internal serialisation provides happens-before.
+//    2. Declare this adapter `@unchecked Sendable` because Nordic delegates
+//       and AsyncThrowingStream termination cross Swift-concurrency domains.
+//       Mutable state is protected by `lock`, and cancellation aborts are
+//       dispatched onto the same serial queue Nordic uses for delegate calls.
 //    3. Hand the continuation a `Sendable` AsyncThrowingStream which is safe
 //       to `yield` from any thread.
 //
@@ -34,14 +34,80 @@ import CoreBluetooth
 /// run is undefined; create a fresh `DFUSession` each time.
 final class DFUSession: NSObject, @unchecked Sendable {
 
-    private var continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation?
-    private var controller: DFUServiceController?
+    private struct State {
+        var continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation?
+        var controller: DFUServiceController?
+        var currentPart: Int = 1
+        var totalParts: Int = 1
+    }
 
-    // Track multi-part progress so we can echo it on every yield, including
-    // the non-`.uploading` phases that Nordic's progress delegate never
-    // calls back for.
-    private var currentPart: Int = 1
-    private var totalParts: Int = 1
+    private let lock = NSLock()
+    private var lockedState = State()
+
+    private func withLockedState<T>(_ body: (inout State) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&lockedState)
+    }
+
+    private func context() -> (
+        continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation,
+        currentPart: Int,
+        totalParts: Int
+    )? {
+        withLockedState { state in
+            guard let continuation = state.continuation else { return nil }
+            return (continuation, state.currentPart, state.totalParts)
+        }
+    }
+
+    private func yieldState(_ state: DFUProgress.State, percentComplete: Double = 0) {
+        guard let context = context() else { return }
+        context.continuation.yield(DFUProgress(
+            state: state,
+            percentComplete: percentComplete,
+            currentPart: context.currentPart,
+            totalParts: context.totalParts
+        ))
+    }
+
+    private func yieldUploadProgress(
+        part: Int,
+        totalParts: Int,
+        percentComplete: Int,
+        bytesPerSecond: Double
+    ) {
+        let continuation = withLockedState { state in
+            state.currentPart = part
+            state.totalParts = totalParts
+            return state.continuation
+        }
+        continuation?.yield(DFUProgress(
+            state: .uploading,
+            percentComplete: Double(percentComplete),
+            currentPart: part,
+            totalParts: totalParts,
+            bytesPerSecond: bytesPerSecond
+        ))
+    }
+
+    private func finish(throwing error: Error? = nil) {
+        let continuation = withLockedState { state in
+            let continuation = state.continuation
+            state.continuation = nil
+            state.controller = nil
+            return continuation
+        }
+        if let error {
+            continuation?.finish(throwing: error)
+        } else {
+            continuation?.finish()
+        }
+    }
+
+    private func controllerForCancellation() -> DFUServiceController? {
+        withLockedState { $0.controller }
+    }
 
     /// Kick off the DFU and stream `DFUProgress` events.
     ///
@@ -64,14 +130,23 @@ final class DFUSession: NSObject, @unchecked Sendable {
         queue: DispatchQueue
     ) -> AsyncThrowingStream<DFUProgress, Error> {
         AsyncThrowingStream { [self] cont in
-            self.continuation = cont
+            self.withLockedState { state in
+                state.continuation = cont
+                state.controller = nil
+                state.currentPart = 1
+                state.totalParts = 1
+            }
 
             // Cancellation support: terminating the stream from the consumer
             // side (e.g. the Task is cancelled) maps to Nordic's `abort()`.
-            cont.onTermination = { [weak self] reason in
+            cont.onTermination = { [weak self, queue] reason in
                 guard let self else { return }
                 if case .cancelled = reason {
-                    _ = self.controller?.abort()
+                    queue.async { [weak self] in
+                        guard let self,
+                              let controller = self.controllerForCancellation() else { return }
+                        _ = controller.abort()
+                    }
                 }
             }
 
@@ -85,7 +160,10 @@ final class DFUSession: NSObject, @unchecked Sendable {
             // application mode, which would otherwise abort here.
             initiator.forceDfu = true
 
-            self.controller = initiator.start(targetWithIdentifier: targetIdentifier)
+            let controller = initiator.start(targetWithIdentifier: targetIdentifier)
+            self.withLockedState { state in
+                state.controller = controller
+            }
         }
     }
 }
@@ -95,63 +173,34 @@ final class DFUSession: NSObject, @unchecked Sendable {
 extension DFUSession: DFUServiceDelegate {
 
     func dfuStateDidChange(to state: DFUState) {
-        guard let cont = continuation else { return }
         switch state {
         case .connecting:
-            cont.yield(DFUProgress(
-                state: .connecting,
-                currentPart: currentPart, totalParts: totalParts
-            ))
+            yieldState(.connecting)
         case .starting:
-            cont.yield(DFUProgress(
-                state: .starting,
-                currentPart: currentPart, totalParts: totalParts
-            ))
+            yieldState(.starting)
         case .enablingDfuMode:
             // Nordic's "enablingDfuMode" — the buttonless DFU service is
             // being asked to reset into bootloader. We've already done the
             // MetaWear-specific handoff before reaching this delegate; this
             // case mostly fires for buttonless services we don't trigger.
             // Map to `.bootloaderHandoff` for visibility.
-            cont.yield(DFUProgress(
-                state: .bootloaderHandoff,
-                currentPart: currentPart, totalParts: totalParts
-            ))
+            yieldState(.bootloaderHandoff)
         case .uploading:
             // Real progress comes through `dfuProgressDidChange` —
             // `dfuStateDidChange(to: .uploading)` only fires once at the
             // start of the upload phase. Yield a 0% snapshot here so
             // observers see the state transition immediately.
-            cont.yield(DFUProgress(
-                state: .uploading,
-                percentComplete: 0,
-                currentPart: currentPart, totalParts: totalParts
-            ))
+            yieldState(.uploading)
         case .validating:
-            cont.yield(DFUProgress(
-                state: .validating,
-                percentComplete: 100,
-                currentPart: currentPart, totalParts: totalParts
-            ))
+            yieldState(.validating, percentComplete: 100)
         case .disconnecting:
-            cont.yield(DFUProgress(
-                state: .disconnecting,
-                percentComplete: 100,
-                currentPart: currentPart, totalParts: totalParts
-            ))
+            yieldState(.disconnecting, percentComplete: 100)
         case .completed:
-            cont.yield(DFUProgress(
-                state: .completed,
-                percentComplete: 100,
-                currentPart: currentPart, totalParts: totalParts
-            ))
-            cont.finish()
+            yieldState(.completed, percentComplete: 100)
+            finish()
         case .aborted:
-            cont.yield(DFUProgress(
-                state: .aborted,
-                currentPart: currentPart, totalParts: totalParts
-            ))
-            cont.finish(throwing: MWFirmwareError.aborted)
+            yieldState(.aborted)
+            finish(throwing: MWFirmwareError.aborted)
         @unknown default:
             // Future Nordic library versions may add states. Don't yield
             // anything; wait for the next known state or for an error.
@@ -160,10 +209,8 @@ extension DFUSession: DFUServiceDelegate {
     }
 
     func dfuError(_ error: DFUError, didOccurWithMessage message: String) {
-        continuation?.finish(
-            throwing: MWFirmwareError.dfuFailed(
-                message: "\(error.rawValue): \(message)"
-            )
+        finish(
+            throwing: MWFirmwareError.dfuFailed(message: "\(error.rawValue): \(message)")
         )
     }
 }
@@ -179,15 +226,12 @@ extension DFUSession: DFUProgressDelegate {
         currentSpeedBytesPerSecond: Double,
         avgSpeedBytesPerSecond: Double
     ) {
-        self.currentPart = part
-        self.totalParts = totalParts
-        continuation?.yield(DFUProgress(
-            state: .uploading,
-            percentComplete: Double(progress),
-            currentPart: part,
+        yieldUploadProgress(
+            part: part,
             totalParts: totalParts,
+            percentComplete: progress,
             bytesPerSecond: currentSpeedBytesPerSecond
-        ))
+        )
     }
 }
 
