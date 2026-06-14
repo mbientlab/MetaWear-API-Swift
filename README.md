@@ -1,6 +1,24 @@
 # MetaWear Swift SDK
 
-A clean-room Swift 6 implementation of the MetaWear protocol.
+A Swift 6 implementation of the [MetaWear protocol](https://github.com/mbientlab/MetaWear-API).
+
+This repository contains both the reusable Swift Package products and the MetaWear app:
+
+- Use `MetaWear` when you need the scanner, device actor, BLE transport, protocol layer, and sensor/module APIs.
+- Add `MetaWearPersistence` when you want SwiftData-backed session storage and CSV export helpers.
+- Add `MetaWearFirmware` only when your app needs over-the-air DFU firmware updates.
+- Open `Apps/MetaWear/MetaWearApp.xcodeproj` for the full MetaWear app.
+
+## Table of Contents
+
+| Start here | Use it for |
+|------------|------------|
+| [Quick Start](#quick-start) | Adding the package, scanning, connecting, streaming, and sending simple commands |
+| [Architecture](#architecture) | Understanding the scanner/device/protocol/transport layering |
+| [Supported sensors and modules](#supported-sensors-and-modules) | Finding the Swift type and configuration shape for each MetaWear module |
+| [Logging](#logging) | On-device flash logging, typed downloads, anonymous logger recovery, and CSV export |
+| [Persistence (SwiftData)](#persistence-swiftdata) | Saving downloaded sessions and reconstructing typed samples |
+| [Testing](#testing) | Running unit tests, hardware integration tests, and the macOS CLI demo |
 
 ## Requirements
 
@@ -17,10 +35,10 @@ A clean-room Swift 6 implementation of the MetaWear protocol.
 
 This SDK targets MbientLab MetaMotion boards only. Anything else (legacy MetaWear R / RG / RPro / C / CPro, MetaMotion C, MetaEnvironment, MetaTracker, MetaHealth) is treated as `MWModel.unknown` — connect / read may still work but module-level behaviour is not validated.
 
-| Board                | Model number (`0x2A24`) | Hardware revisions (`0x2A27`)                | Acc / Gyro chip |
-|----------------------|:-----------------------:|:---------------------------------------------|:----------------|
-| MetaMotion R / RL    | `5`                     | `r0.1`, `r0.2`, `r0.3`, `r0.4`, `r0.5`       | BMI160          |
-| MetaMotion S         | `8`                     | `r0.1`                                        | BMI270          |
+| Board                | Model number (`0x2A24`) | Hardware revisions (`0x2A27`)                |
+|----------------------|:-----------------------:|:---------------------------------------------|
+| MetaMotion R / RL    | `5`                     | `r0.1`, `r0.2`, `r0.3`, `r0.4`, `r0.5`       |
+| MetaMotion S         | `8`                     | `r0.1`                                       |
 
 `MWModel` decodes the Model Number characteristic into a typed case; `MWDeviceInformation.isHardwareRevisionSupported` cross-checks the revision against the table above:
 
@@ -39,15 +57,51 @@ The validator is forgiving about formatting — `"r0.4"`, `"R0.4"`, and `"0.4"` 
 
 ## What ships in this repository
 
-| Product / target                  | Kind        | What it is                                                                                       |
-|-----------------------------------|-------------|--------------------------------------------------------------------------------------------------|
-| `MetaWear`                        | library     | Core SDK — scanner, device actor, BLE transport, protocol layer, every sensor module             |
-| `MetaWearPersistence`             | library     | SwiftData session storage, depends on `MetaWear`                                                  |
-| `MetaWearFirmware`                | library     | Over-the-air firmware update, wraps NordicDFU 4.16.0 (`@preconcurrency`) in an actor-isolated `DFUSession` |
-| `MetaWearDemo`                    | executable  | macOS CLI that exercises the core SDK against a real board                                       |
-| `Apps/MetaWear/MetaWearApp.xcodeproj` | iOS app | SwiftUI demo — scan / connect / live-stream / log / download / export, SwiftData-backed sessions  |
+| Product / target                      | Kind        | What it is                                                                                       |
+|---------------------------------------|-------------|--------------------------------------------------------------------------------------------------|
+| `MetaWear`                            | library     | Core SDK — scanner, device actor, BLE transport, protocol layer, every sensor module             |
+| `MetaWearPersistence`                 | library     | SwiftData session storage, depends on `MetaWear`                                                  |
+| `MetaWearFirmware`                    | library     | Over-the-air firmware update, wraps NordicDFU 4.16.0 (`@preconcurrency`) in an actor-isolated `DFUSession` |
+| `MetaWearDemo`                        | executable  | macOS CLI that exercises the core SDK against a real board                                       |
+| `Apps/MetaWear/MetaWearApp.xcodeproj` | iOS app     | MetaWear App — scan / connect / live-stream / log / download / export, SwiftData-backed sessions  |
 
-The four SwiftPM products are intentionally split so an app can take just `MetaWear` without pulling NordicDFU or SwiftData. Hardware integration tests (`MetaWearHardwareTests`) live in `Tests/IntegrationTests/MetaWearTestHost.xcodeproj` — see [Hardware integration tests](#hardware-integration-tests).
+The four SwiftPM products are intentionally split so an app can take just `MetaWear` without pulling NordicDFU or SwiftData.
+Hardware integration tests (`MetaWearHardwareTests`) live in `Tests/IntegrationTests/MetaWearTestHost.xcodeproj` — see [Hardware integration tests](#hardware-integration-tests).
+
+---
+
+## Development workflow
+
+### Repository layout
+
+| Path | Purpose |
+|------|---------|
+| `Sources/MetaWear` | Core SDK: public API, protocol layer, module implementations, CoreBluetooth transport, and mocks |
+| `Sources/MetaWearPersistence` | SwiftData session storage and sample reconstruction |
+| `Sources/MetaWearFirmware` | Firmware catalog lookup, downloads, and Nordic DFU orchestration |
+| `Sources/MetaWearDemo` | macOS CLI smoke test against real hardware |
+| `Apps/MetaWear/MetaWear` | SwiftUI iOS demo app, organized by app state, view models, features, and design components |
+| `Tests/MetaWearTests` | Unit tests for protocol, parsing, modules, device state, and mock transport behavior |
+| `Tests/MetaWearPersistenceTests` | In-memory SwiftData persistence tests |
+| `Tests/MetaWearFirmwareTests` | Firmware catalog, version, and server behavior tests |
+| `Tests/MetaWearHardwareTests` | Real-device integration tests hosted by `Tests/IntegrationTests/MetaWearTestHost.xcodeproj` |
+
+### Common commands
+
+```bash
+# Run all SwiftPM tests that do not require Bluetooth hardware.
+swift test
+
+# Run one suite while developing a module.
+swift test --filter MWLEDTests
+
+# Exercise the SDK against a nearby board from the command line.
+swift run MetaWearDemo
+```
+
+### Documentation standards
+
+Public SDK types should have `///` documentation because they surface in Xcode Quick Help and generated symbol docs. Implementation comments should explain protocol quirks, firmware ordering constraints, or concurrency reasoning; avoid comments that merely restate a line of Swift. Markdown docs should prefer small, runnable snippets and should call out whether hardware is required.
 
 ---
 
@@ -191,6 +245,7 @@ Enforces the device state machine at compile time; invalid transitions throw `MW
 ```
 
 Key methods:
+
 ```swift
 public func connect() async throws
 public func disconnect() async throws
@@ -1349,18 +1404,6 @@ On first run macOS will prompt for Bluetooth permission — grant it once and it
 7. Streams the accelerometer at 100 Hz for 5 seconds, printing every 20th sample
 8. Reports total sample count and effective Hz
 9. Disconnects cleanly
-
----
-
-## Protocol reference
-
-Full byte-level specification — every module opcode, register, command byte layout, config bit-field, response format, and scale factor:
-
-```
-/Users/kasso/Documents/MetaWear-API/docs/protocol-reference.md
-```
-
-Run `mkdocs serve` in that directory to browse as a formatted site.
 
 ---
 

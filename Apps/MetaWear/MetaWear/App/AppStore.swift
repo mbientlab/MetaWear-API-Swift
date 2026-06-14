@@ -4,6 +4,12 @@ import SwiftData
 import MetaWear
 import MetaWearPersistence
 
+/// Main app coordinator shared by the SwiftUI scene.
+///
+/// Owns long-lived services (`MetaWearScanner`, SwiftData containers, and the
+/// persistence actor), tracks the active device, and handles cross-feature
+/// flows that do not belong to a single screen: remembered devices, orphan log
+/// recovery, connect/disconnect, and unexpected-disconnect handling.
 @Observable
 @MainActor
 final class AppStore {

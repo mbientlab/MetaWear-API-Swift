@@ -2,6 +2,10 @@ import Foundation
 import Observation
 import MetaWearPersistence
 
+/// Minimal view model for the session-history screen.
+///
+/// Listing is driven directly by SwiftData queries in the view; this type owns
+/// actions that need async persistence calls and error presentation.
 @Observable
 @MainActor
 final class SessionHistoryViewModel {

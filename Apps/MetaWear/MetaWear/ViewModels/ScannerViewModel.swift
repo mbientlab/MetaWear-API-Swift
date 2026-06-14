@@ -2,6 +2,10 @@ import Foundation
 import Observation
 import MetaWear
 
+/// Presentation model for scan results.
+///
+/// Wraps `MetaWearScanner` with sorted device lists and optional RSSI polling
+/// for connected devices while keeping CoreBluetooth state owned by the SDK.
 @Observable
 @MainActor
 final class ScannerViewModel {

@@ -4,6 +4,11 @@ import SwiftData
 import MetaWear
 import MetaWearPersistence
 
+/// Coordinates download and persistence for stopped on-device logging sessions.
+///
+/// Drains the board once into raw entries, decodes those entries per pending
+/// `LogSessionRecord`, saves typed snapshots through `MWPersistenceStore`, and
+/// updates download progress for the UI.
 @Observable
 @MainActor
 final class DownloadViewModel {

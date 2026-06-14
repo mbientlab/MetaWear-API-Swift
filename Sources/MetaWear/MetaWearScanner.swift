@@ -73,6 +73,7 @@ public final class MetaWearScanner {
 
     // MARK: - Init
 
+    /// Create a scanner backed by a shared CoreBluetooth central manager.
     public init() {
         self.centralManager = MWCentralManager()
         let manager = centralManager
@@ -91,6 +92,13 @@ public final class MetaWearScanner {
 
     // MARK: - Scanning
 
+    /// Start observing BLE advertisements.
+    ///
+    /// Scans without a service filter because MetaWear devices do not
+    /// consistently include the custom service UUID in advertisements.
+    /// Discovered devices whose local name starts with `"MetaWear"` are
+    /// exposed through `discoveredDevices`; all observed names/RSSI values
+    /// are still cached for remembered-device and rename workflows.
     public func startScan() {
         guard !isScanning else { return }
         mwLog("[Scanner] startScan")
@@ -162,6 +170,7 @@ public final class MetaWearScanner {
         return device
     }
 
+    /// Stop the active scan task and leave already-discovered devices cached.
     public func stopScan() {
         mwLog("[Scanner] stopScan")
         scanTask?.cancel()

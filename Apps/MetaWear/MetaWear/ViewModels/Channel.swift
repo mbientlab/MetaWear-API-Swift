@@ -1,6 +1,11 @@
 import Foundation
 import Observation
 
+/// One charted sensor stream in a live session.
+///
+/// Separates high-frequency sample ingestion from observed UI state: raw
+/// samples accumulate in an ignored ring buffer, then the stream view model
+/// snapshots into observed fields at a fixed UI cadence.
 @Observable
 @MainActor
 final class Channel: Identifiable {

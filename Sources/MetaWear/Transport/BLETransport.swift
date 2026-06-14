@@ -3,9 +3,13 @@ import Foundation
 
 // MARK: - Scan result
 
+/// One CoreBluetooth advertisement normalized for the SDK scanner.
 public struct ScanResult: Sendable {
+    /// Stable CoreBluetooth identifier for the advertising peripheral.
     public let identifier: UUID
+    /// Advertised local name, if present in the packet.
     public let name: String?
+    /// Received signal strength in dBm for this advertisement.
     public let rssi: Int
     /// Raw bytes from `CBAdvertisementDataManufacturerDataKey`, if present.
     /// For iBeacon advertisements this is the full manufacturer-specific payload

@@ -3,6 +3,12 @@ import Observation
 import SwiftData
 import MetaWear
 
+/// Drives on-device logging setup and teardown.
+///
+/// Converts selected UI sensors into SDK loggers, persists pending
+/// `LogSessionRecord` rows so interrupted sessions can be recovered, and
+/// keeps elapsed-time state for the logging UI while the board records to
+/// flash independently of the app.
 @Observable
 @MainActor
 final class LogSessionViewModel {

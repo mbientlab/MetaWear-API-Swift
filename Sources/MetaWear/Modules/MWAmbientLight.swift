@@ -39,12 +39,18 @@ public struct MWAmbientLight: MWStreamable {
     /// (dense 0-5); the hardware register skips 4-5 and encodes 48X / 96X
     /// as 6 / 7, which `configByte0` handles.
     public enum Gain: UInt8, Sendable, CaseIterable {
-        case x1  = 0    ///< [1, 64 k] lux (default)
-        case x2  = 1    ///< [0.5, 32 k] lux
-        case x4  = 2    ///< [0.25, 16 k] lux
-        case x8  = 3    ///< [0.125, 8 k] lux
-        case x48 = 4    ///< [0.02, 1.3 k] lux
-        case x96 = 5    ///< [0.01, 600] lux
+        /// [1, 64 k] lux (default).
+        case x1  = 0
+        /// [0.5, 32 k] lux.
+        case x2  = 1
+        /// [0.25, 16 k] lux.
+        case x4  = 2
+        /// [0.125, 8 k] lux.
+        case x8  = 3
+        /// [0.02, 1.3 k] lux.
+        case x48 = 4
+        /// [0.01, 600] lux.
+        case x96 = 5
 
         /// Encoded value for the LTR329 `als_gain` bitfield (3 bits, bits 2-4 of byte 0).
         var registerValue: UInt8 {
@@ -62,7 +68,8 @@ public struct MWAmbientLight: MWStreamable {
     /// Raw values match C++ `MblMwAlsLtr329IntegrationTime` (enum order is not
     /// sorted by milliseconds on purpose — 100 ms is the default at index 0).
     public enum IntegrationTime: UInt8, Sendable, CaseIterable {
-        case ms100 = 0  ///< Default
+        /// Default 100 ms integration time.
+        case ms100 = 0
         case ms50  = 1
         case ms200 = 2
         case ms400 = 3
@@ -84,7 +91,8 @@ public struct MWAmbientLight: MWStreamable {
         case ms50   = 0
         case ms100  = 1
         case ms200  = 2
-        case ms500  = 3  ///< Default
+        /// Default 500 ms measurement rate.
+        case ms500  = 3
         case ms1000 = 4
         case ms2000 = 5
 

@@ -757,9 +757,12 @@ public extension MWDataProcessor {
     struct Delta: MWDataProcessorConfig, Sendable {
         /// What value the delta stage emits when the threshold is crossed.
         public enum Mode: UInt8, Sendable {
-            case absolute     = 0   ///< Output the raw input on each threshold crossing.
-            case differential = 1   ///< Output the raw delta from the last reference.
-            case binary       = 2   ///< Output +1 when above, -1 when below.
+            /// Output the raw input on each threshold crossing.
+            case absolute     = 0
+            /// Output the raw delta from the last reference.
+            case differential = 1
+            /// Output +1 when above, -1 when below.
+            case binary       = 2
         }
         /// Magnitude expressed in already-scaled board units (LSBs).
         public let magnitude: Int32
@@ -814,10 +817,14 @@ public extension MWDataProcessor {
     struct Pulse: MWDataProcessorConfig, Sendable {
         /// What value the pulse-detector emits per detected pulse.
         public enum Output: UInt8, Sendable {
-            case width    = 0   ///< Pulse duration (samples above threshold).
-            case area     = 1   ///< Integrated area above threshold.
-            case peak     = 2   ///< Peak value during the pulse.
-            case onDetect = 3   ///< Boolean pulse detected indicator (UInt32).
+            /// Pulse duration (samples above threshold).
+            case width    = 0
+            /// Integrated area above threshold.
+            case area     = 1
+            /// Peak value during the pulse.
+            case peak     = 2
+            /// Boolean pulse detected indicator (UInt32).
+            case onDetect = 3
         }
         /// Threshold in already-scaled board units (LSBs).
         public let threshold: Int32
@@ -926,8 +933,10 @@ public extension MWDataProcessor {
     struct Accounter: MWDataProcessorConfig, Sendable {
         /// What value the accounter prepends to each sample.
         public enum Mode: UInt8, Sendable {
-            case count = 0  ///< Prepend a monotonically-increasing packet counter.
-            case time  = 1  ///< Prepend a compact epoch offset (ms since boot).
+            /// Prepend a monotonically-increasing packet counter.
+            case count = 0
+            /// Prepend a compact epoch offset (ms since boot).
+            case time  = 1
         }
         public let mode: Mode
         /// Pinned to 4 bytes as firmware / logger expect.

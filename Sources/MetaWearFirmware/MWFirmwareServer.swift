@@ -20,19 +20,25 @@ import Foundation
 ///                         firmware artifact (avoids loading the whole image
 ///                         into memory and lets us hand a `URL` to NordicDFU).
 public protocol MWFirmwareFetcher: Sendable {
+    /// Fetch raw bytes from a URL. Used for the firmware catalog JSON.
     func data(from url: URL) async throws -> (Data, HTTPURLResponse)
+    /// Download a URL to a temporary file. Used for firmware artifacts so
+    /// NordicDFU can consume a local file URL.
     func download(from url: URL) async throws -> (URL, HTTPURLResponse)
 }
 
 // MARK: - URLSession-backed fetcher (production default)
 
+/// Production `MWFirmwareFetcher` backed by `URLSession`.
 public struct URLSessionFetcher: MWFirmwareFetcher {
     private let session: URLSession
 
+    /// - Parameter session: Session used for catalog requests and firmware downloads.
     public init(session: URLSession = .shared) {
         self.session = session
     }
 
+    /// Fetch catalog data and validate that the response is HTTP.
     public func data(from url: URL) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(from: url)
         guard let http = response as? HTTPURLResponse else {
@@ -43,6 +49,8 @@ public struct URLSessionFetcher: MWFirmwareFetcher {
         return (data, http)
     }
 
+    /// Download firmware bytes to a temporary file and validate that the
+    /// response is HTTP.
     public func download(from url: URL) async throws -> (URL, HTTPURLResponse) {
         let (tempURL, response) = try await session.download(from: url)
         guard let http = response as? HTTPURLResponse else {
@@ -82,6 +90,12 @@ public struct MWFirmwareServer: Sendable {
     private let catalogURL: URL
     private let sdkVersion: String
 
+    /// Create a firmware server client.
+    ///
+    /// - Parameters:
+    ///   - fetcher: Network implementation. Inject a test double for unit tests.
+    ///   - catalogURL: URL for MbientLab's `info2.json` catalog.
+    ///   - sdkVersion: SDK version used to filter catalog entries by minimum iOS SDK.
     public init(
         fetcher: MWFirmwareFetcher = URLSessionFetcher(),
         catalogURL: URL = MWFirmwareServer.defaultCatalogURL,
