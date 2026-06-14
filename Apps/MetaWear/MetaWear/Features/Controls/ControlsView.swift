@@ -16,8 +16,9 @@ struct ControlsView: View {
     var body: some View {
         Form {
             if let viewModel {
+                @Bindable var viewModel = viewModel
                 Section("LED") {
-                    Picker("Color", selection: Binding(get: { viewModel.ledColor }, set: { viewModel.ledColor = $0 })) {
+                    Picker("Color", selection: $viewModel.ledColor) {
                         Text("Green").tag(MWLED.Color.green)
                         Text("Red").tag(MWLED.Color.red)
                         Text("Blue").tag(MWLED.Color.blue)
@@ -51,33 +52,31 @@ struct ControlsView: View {
                     QuickReadRow(
                         title: "Temperature",
                         icon: "thermometer.medium",
-                        value: viewModel.temperatureC.map { String(format: "%.1f °C", $0) },
+                        value: viewModel.temperatureC.map { Self.formattedMeasurement($0, unit: "°C") },
                         isLoading: viewModel.isReadingTemperature
                     ) { Task { await viewModel.readTemperature() } }
 
                     QuickReadRow(
                         title: "Pressure",
                         icon: "barometer",
-                        value: viewModel.pressurePa.map { String(format: "%.1f hPa", $0 / 100) },
+                        value: viewModel.pressurePa.map { Self.formattedMeasurement($0 / 100, unit: "hPa") },
                         isLoading: viewModel.isReadingPressure
                     ) { Task { await viewModel.readPressure() } }
 
                     QuickReadRow(
                         title: "Ambient Light",
                         icon: "sun.max",
-                        value: viewModel.ambientLightLux.map { String(format: "%.1f lux", $0) },
+                        value: viewModel.ambientLightLux.map { Self.formattedMeasurement($0, unit: "lux") },
                         isLoading: viewModel.isReadingLight
                     ) { Task { await viewModel.readAmbientLight() } }
                 }
 
                 Section("Haptic") {
-                    Stepper("Duty cycle: \(viewModel.motorDuty)%",
-                            value: Binding(get: { Int(viewModel.motorDuty) },
-                                           set: { viewModel.motorDuty = UInt8(clamping: $0) }),
+                    Stepper("Duty cycle: \(viewModel.motorDutyPercent)%",
+                            value: $viewModel.motorDutyPercent,
                             in: 0...100, step: 10)
-                    Stepper("Pulse width: \(viewModel.motorPulseMs) ms",
-                            value: Binding(get: { Int(viewModel.motorPulseMs) },
-                                           set: { viewModel.motorPulseMs = UInt16(clamping: $0) }),
+                    Stepper("Pulse width: \(viewModel.motorPulseMilliseconds) ms",
+                            value: $viewModel.motorPulseMilliseconds,
                             in: 50...2000, step: 50)
                     HStack {
                         Button { Task { await viewModel.pulseMotor() } } label: {
@@ -102,6 +101,18 @@ struct ControlsView: View {
                 viewModel = ControlsViewModel(device: device)
             }
         }
+        .alert(item: Binding(
+            get: { viewModel?.lastError },
+            set: { viewModel?.lastError = $0 }
+        )) { err in
+            Alert(title: Text("Control failed"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
+        }
+    }
+
+    private static func formattedMeasurement(_ value: Float, unit: String) -> String {
+        value.formatted(.number.precision(.fractionLength(1))) + " " + unit
     }
 }
 

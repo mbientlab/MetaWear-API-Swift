@@ -67,6 +67,8 @@ enum CSVExporter {
             return try await store.exportTable(sessionID: snapshot.id, as: Quaternion.self)
         case EulerAngles.persistenceKind:
             return try await store.exportTable(sessionID: snapshot.id, as: EulerAngles.self)
+        case CorrectedCartesianFloat.persistenceKind:
+            return try await store.exportTable(sessionID: snapshot.id, as: CorrectedCartesianFloat.self)
         case Float.persistenceKind:
             return try await store.exportTable(sessionID: snapshot.id, as: Float.self)
         case Bool.persistenceKind:

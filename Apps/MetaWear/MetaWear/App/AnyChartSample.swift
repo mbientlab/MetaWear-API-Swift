@@ -75,7 +75,15 @@ extension AnyChartSample {
         AnyChartSample(time: s.date, f0: s.value.heading, f1: s.value.pitch, f2: s.value.roll, f3: s.value.yaw, channelCount: 4)
     }
 
+    static func from(_ s: MWLoggedSample<CorrectedCartesianFloat>) -> AnyChartSample {
+        AnyChartSample(time: s.date, f0: s.value.x, f1: s.value.y, f2: s.value.z, channelCount: 3)
+    }
+
     static func from(_ s: MWLoggedSample<Float>) -> AnyChartSample {
         AnyChartSample(time: s.date, f0: s.value, channelCount: 1)
+    }
+
+    static func from(_ s: MWLoggedSample<Bool>) -> AnyChartSample {
+        AnyChartSample(time: s.date, f0: s.value ? 1 : 0, channelCount: 1)
     }
 }

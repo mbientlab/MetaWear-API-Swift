@@ -26,6 +26,16 @@ final class ControlsViewModel {
     var isReadingPressure = false
     var isReadingLight = false
 
+    var motorDutyPercent: Int {
+        get { Int(motorDuty) }
+        set { motorDuty = UInt8(clamping: newValue) }
+    }
+
+    var motorPulseMilliseconds: Int {
+        get { Int(motorPulseMs) }
+        set { motorPulseMs = UInt16(clamping: newValue) }
+    }
+
     init(device: MetaWearDevice) {
         self.device = device
     }

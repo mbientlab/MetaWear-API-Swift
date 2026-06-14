@@ -7,9 +7,8 @@ struct SessionDetailView: View {
     let snapshot: MWSessionSnapshot
     @Environment(AppStore.self) private var appStore
     @State private var preview: [AnyChartSample] = []
-    @State private var loadError: AppError?
-    @State private var exportItems: [ExportSheetItem] = []
-    @State private var showExport = false
+    @State private var lastError: AppError?
+    @State private var exportResult: ExportResult?
 
     var body: some View {
         ScrollView {
@@ -36,8 +35,13 @@ struct SessionDetailView: View {
         .task {
             await loadPreview()
         }
-        .sheet(isPresented: $showExport) {
-            ExportSheet(items: exportItems)
+        .sheet(item: $exportResult) { result in
+            ExportSheet(items: result.items)
+        }
+        .alert(item: $lastError) { err in
+            Alert(title: Text("Session failed"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
         }
     }
 
@@ -61,18 +65,32 @@ struct SessionDetailView: View {
             case Quaternion.persistenceKind:
                 let samples = try await appStore.persistence.fetchSamples(sessionID: snapshot.id, as: Quaternion.self)
                 preview = samples.suffix(600).map(AnyChartSample.from)
+            case EulerAngles.persistenceKind:
+                let samples = try await appStore.persistence.fetchSamples(sessionID: snapshot.id, as: EulerAngles.self)
+                preview = samples.suffix(600).map(AnyChartSample.from)
+            case CorrectedCartesianFloat.persistenceKind:
+                let samples = try await appStore.persistence.fetchSamples(sessionID: snapshot.id, as: CorrectedCartesianFloat.self)
+                preview = samples.suffix(600).map(AnyChartSample.from)
+            case Float.persistenceKind:
+                let samples = try await appStore.persistence.fetchSamples(sessionID: snapshot.id, as: Float.self)
+                preview = samples.suffix(600).map(AnyChartSample.from)
+            case Bool.persistenceKind:
+                let samples = try await appStore.persistence.fetchSamples(sessionID: snapshot.id, as: Bool.self)
+                preview = samples.suffix(600).map(AnyChartSample.from)
             default:
                 preview = []
             }
         } catch {
-            loadError = AppError(error: error)
+            lastError = AppError(error: error)
         }
     }
 
     private func prepareExport() async {
-        if let url = try? await CSVExporter.exportToTempFile(store: appStore.persistence, snapshot: snapshot) {
-            exportItems = [ExportSheetItem(url: url, subtitle: "\(snapshot.sampleCount) samples")]
-            showExport = true
+        do {
+            let url = try await CSVExporter.exportToTempFile(store: appStore.persistence, snapshot: snapshot)
+            exportResult = ExportResult(items: [ExportSheetItem(url: url, subtitle: "\(snapshot.sampleCount) samples")])
+        } catch {
+            lastError = AppError(error: error)
         }
     }
 }
