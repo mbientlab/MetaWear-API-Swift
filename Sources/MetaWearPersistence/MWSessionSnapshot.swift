@@ -9,13 +9,21 @@ public struct MWSessionSnapshot: Sendable, Identifiable {
     /// Stable UUID assigned when the session was created.
     /// Pass this back to `MWPersistenceStore` methods that operate on a specific session.
     public let id: UUID
+    /// CoreBluetooth peripheral UUID of the board that produced the samples.
     public let deviceID: UUID
+    /// Discriminator matching `MWPersistable.persistenceKind`.
     public let sensorKind: String
+    /// Wall-clock timestamp of the first sample in the session.
     public let startDate: Date
+    /// Wall-clock timestamp of the last sample in the session.
     public let endDate: Date
+    /// Number of persisted samples in the session.
     public let sampleCount: Int
+    /// Device serial copied from the Device Information Service at capture time.
     public let deviceSerial: String
+    /// Device model number copied from the Device Information Service.
     public let deviceModel: String
+    /// Firmware revision copied from the Device Information Service.
     public let deviceFirmware: String
     /// User-facing sensor + settings string, e.g. "Gyroscope · ±2000 dps ·
     /// 25 Hz". Nil for older records persisted before the field existed —

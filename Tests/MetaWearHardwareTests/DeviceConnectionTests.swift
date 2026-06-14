@@ -79,4 +79,3 @@ struct DeviceConnectionTests {
         print("\n  ✓ disconnect_whenConnected_returnsToDisconnected\n")
     }
 }
-

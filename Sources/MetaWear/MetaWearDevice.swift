@@ -3,12 +3,24 @@ import Foundation
 
 // MARK: - Device state
 
+/// High-level lifecycle state for a single MetaWear connection.
+///
+/// The actor uses this as a guardrail: operations that would conflict on the
+/// board, such as streaming while downloading logs, fail early with
+/// `MWError.invalidState` instead of racing firmware state.
 public enum DeviceState: Equatable, Sendable {
+    /// No active BLE connection is held by this actor.
     case disconnected
+    /// A connection attempt is in progress and initialization has not finished.
     case connecting
+    /// Connected, initialized, and ready for reads, commands, streams, or logs.
     case idle
+    /// One or more live BLE streams are active.
     case streaming
+    /// The logging module is recording one or more configured signals to flash.
     case logging
+    /// A flash-log readout is in progress. The associated value is the last
+    /// reported completion fraction (`0.0...1.0`).
     case downloading(progress: Double)
 }
 
@@ -20,9 +32,14 @@ public actor MetaWearDevice {
 
     // MARK: - Public state
 
+    /// Current actor state. Observe this before starting mutually-exclusive
+    /// operations such as logging, streaming, and log download.
     public private(set) var state: DeviceState = .disconnected
+    /// Device Information Service values read during `connect()`.
     public private(set) var deviceInfo: MWDeviceInformation?
+    /// Module-discovery table keyed by `MWModule`. Populated during `connect()`.
     public private(set) var modules: [MWModule: MWModuleInfo] = [:]
+    /// CoreBluetooth peripheral UUID used to reconnect to this board.
     public nonisolated let identifier: UUID
 
     /// Called when BLE drops unexpectedly (not via `disconnect()`).
@@ -67,6 +84,11 @@ public actor MetaWearDevice {
 
     // MARK: - Init
 
+    /// Create a device actor around a BLE transport.
+    ///
+    /// Production code usually receives instances from `MetaWearScanner`.
+    /// Tests can inject `MockBLETransport`; the demo app can inject
+    /// `DemoBLETransport`.
     public init(identifier: UUID, transport: any BLETransport) {
         self.identifier = identifier
         self.transport = transport
@@ -75,6 +97,11 @@ public actor MetaWearDevice {
 
     // MARK: - Connection
 
+    /// Connect, start the protocol layer, read device information, and discover modules.
+    ///
+    /// A successful call leaves the actor in `.idle` with `deviceInfo` and
+    /// `modules` populated. If initialization fails, the actor returns to
+    /// `.disconnected` and rethrows the underlying error.
     public func connect() async throws {
         mwLog("[Device] connect: \(identifier)")
         guard case .disconnected = state else {
@@ -101,6 +128,12 @@ public actor MetaWearDevice {
         try await connect()
     }
 
+    /// Disconnect intentionally and tear down local protocol subscriptions.
+    ///
+    /// This suppresses `onUnexpectedDisconnect`, stops any active streams on
+    /// the Swift side, and clears transient streaming/fusion state. Logger
+    /// registrations are intentionally preserved so callers can reconnect and
+    /// still download logs that remain on the board.
     public func disconnect() async throws {
         mwLog("[Device] disconnect: \(identifier)")
         // Unhook the callback first so the disconnect we're about to trigger
@@ -364,6 +397,12 @@ public actor MetaWearDevice {
         for cmd in sensor.disableCommands where !cmd.isEmpty { try await proto.write(cmd) }
     }
 
+    /// Stop one active stream and unsubscribe its BLE notifications.
+    ///
+    /// If other streams remain active the actor stays in `.streaming`; once
+    /// the last stream stops it returns to `.idle`. Sensor-fusion streams share
+    /// a single firmware engine, so stopping one fusion output only disables
+    /// that output bit while other fusion outputs are still running.
     public func stopStreaming<S: MWStreamable>(_ sensor: S) async throws {
         mwLog("[Device] stopStreaming: \(sensor.module.name)")
         guard case .streaming = state else { return }
@@ -401,6 +440,12 @@ public actor MetaWearDevice {
 
     // MARK: - Logging
 
+    /// Start logging a streamable sensor to on-device flash.
+    ///
+    /// Multiple distinct sensors may be registered in one logging session by
+    /// calling this while the actor is already `.logging`. Each signal is
+    /// split into firmware-sized chunks and registered under `loggerKey` for
+    /// later typed download via `downloadLogs(_:)`.
     public func startLogging<L: MWLoggable>(_ loggable: L) async throws {
         mwLog("[Device] startLogging: \(loggable.module.name)")
         // Allow stacking — multiple distinct sensors can be added to one
@@ -484,6 +529,11 @@ public actor MetaWearDevice {
         }
     }
 
+    /// Stop sensor sampling for a loggable signal and stop the logging module.
+    ///
+    /// Logger IDs stay in the local registry so `downloadLogs(_:)` can decode
+    /// entries afterward. Call `clearLog()` after a successful download to
+    /// remove the board-side log entries and subscriptions.
     public func stopLogging<L: MWLoggable>(_ loggable: L) async throws {
         mwLog("[Device] stopLogging: \(loggable.module.name)")
         // No guard on `state == .logging`: the first call in a multi-sensor
@@ -1522,11 +1572,16 @@ public actor MetaWearDevice {
 
     // MARK: - One-shot reads
 
+    /// Read battery voltage and charge percentage from the Settings module.
     public func readBattery() async throws -> BatteryState {
         let packet = try await proto.read(.settings, 0x0c)
         return try MWPacketParser.parseBatteryState(packet)
     }
 
+    /// Read one temperature channel in degrees Celsius.
+    ///
+    /// Channel availability depends on the board and is reported by the
+    /// temperature module's discovery response.
     public func readTemperature(channel: UInt8 = 0) async throws -> Float {
         let packet = try await proto.read(.temperature, 0x01, channel)
         return try MWPacketParser.parseTemperature(packet)
@@ -1575,6 +1630,7 @@ public actor MetaWearDevice {
 
     // MARK: - Commands
 
+    /// Send a single fire-and-forget command to the board.
     public func send(_ command: any MWCommand) async throws {
         try await proto.write(command.commandData)
     }
@@ -1680,13 +1736,19 @@ public actor MetaWearDevice {
 
     // MARK: - Module info convenience
 
+    /// Discovery information for one module, or `nil` if the module was not
+    /// present in the last initialization table.
     public func moduleInfo(for module: MWModule) -> MWModuleInfo? {
         modules[module]
     }
 
+    /// True when the board reported a gyroscope module during discovery.
     public var hasGyroscope: Bool      { modules[.gyro]?.isPresent ?? false }
+    /// True when the board reported a magnetometer module during discovery.
     public var hasMagnetometer: Bool   { modules[.magnetometer]?.isPresent ?? false }
+    /// True when the board reported a barometer module during discovery.
     public var hasBarometer: Bool      { modules[.barometer]?.isPresent ?? false }
+    /// True when the board reported the sensor-fusion module during discovery.
     public var hasSensorFusion: Bool   { modules[.sensorFusion]?.isPresent ?? false }
 
     // MARK: - Initialization
@@ -1828,9 +1890,13 @@ extension MetaWearDevice {
 
 /// A single 8-byte on-device flash entry returned during log download.
 public struct RawLogEntry: Sendable {
+    /// Logger ID that produced this 4-byte chunk.
     public let id: UInt8
+    /// Reset epoch marker carried in the upper three bits of byte 0.
     public let resetUID: UInt8
+    /// 24-bit device tick count since reset.
     public let tick: UInt32
+    /// Raw 32-bit little-endian payload captured from flash.
     public let rawData: UInt32
     /// Elapsed milliseconds since the MetaWear last reset (tick × ms/tick).
     public let epochMs: Double

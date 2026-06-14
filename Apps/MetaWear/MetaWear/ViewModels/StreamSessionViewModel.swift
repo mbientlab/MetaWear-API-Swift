@@ -3,6 +3,12 @@ import Observation
 import MetaWear
 import MetaWearPersistence
 
+/// Drives the live-streaming screen.
+///
+/// Owns the active sensor streams, per-sensor chart channels, pause/resume
+/// lifecycle, and optional archive-to-history flow for the in-memory ring
+/// buffers. Each stream consumes `MetaWearDevice.startStream(_:)` on a
+/// background task and throttles UI updates through `Channel.displayBuffer`.
 @Observable
 @MainActor
 final class StreamSessionViewModel {

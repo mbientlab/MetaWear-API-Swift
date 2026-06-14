@@ -18,8 +18,11 @@ public struct MWBoardState: Sendable, Equatable, Codable {
     /// Bump on any breaking layout change.
     public static let currentSchemaVersion: Int = 1
 
+    /// Schema version of this serialized payload.
     public let schemaVersion: Int
+    /// Device identity captured during the connection handshake.
     public let deviceInformation: MWDeviceInformation
+    /// Module discovery table captured during initialization.
     public let modules: [MWModuleInfo]
     /// Wall-clock reference: the `Date` at which the board's logging tick was 0.
     /// `nil` when the logging module is not present or the tick reference wasn't read.

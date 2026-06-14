@@ -2,6 +2,10 @@ import Foundation
 import Observation
 import MetaWear
 
+/// Presentation model for quick device controls.
+///
+/// Keeps UI-editable command settings for LED and haptic actions, plus the
+/// latest one-shot read values for temperature, pressure, and ambient light.
 @Observable
 @MainActor
 final class ControlsViewModel {

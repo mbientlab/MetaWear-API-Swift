@@ -2,6 +2,11 @@ import Foundation
 import Observation
 import MetaWear
 
+/// Presentation model for the connected-device overview.
+///
+/// Mirrors immutable device facts, live battery state, and module discovery
+/// into main-actor state that SwiftUI can render without repeatedly crossing
+/// the `MetaWearDevice` actor boundary.
 @Observable
 @MainActor
 final class DeviceViewModel {

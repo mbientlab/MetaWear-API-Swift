@@ -1,5 +1,8 @@
 import Foundation
 
+// `nonisolated`: this is a pure value type with no actor affinity — the app
+// target's default MainActor isolation would otherwise make every member
+// main-actor-only, which blocks nonisolated tests and any future off-main use.
 /// Fixed-capacity FIFO buffer backed by a circular array.
 ///
 /// `append` is O(1) — once full, the oldest element is overwritten in place
@@ -7,9 +10,6 @@ import Foundation
 /// which shifts every remaining element and made each append O(capacity);
 /// at 100 Hz × several channels that put hundreds of thousands of element
 /// moves per second on the main actor.)
-// `nonisolated`: this is a pure value type with no actor affinity — the app
-// target's default MainActor isolation would otherwise make every member
-// main-actor-only, which blocks nonisolated tests and any future off-main use.
 nonisolated struct RingBuffer<Element> {
     private var storage: [Element] = []
     /// Index of the oldest element once the buffer has wrapped.

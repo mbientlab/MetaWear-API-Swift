@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 import MetaWear
 
+/// Stable identity for each sensor family or fusion output the demo app can
+/// stream, log, display, and persist.
 enum SensorKey: Hashable, Sendable {
     case accelerometer
     case gyroscope
@@ -75,6 +77,8 @@ enum SensorKey: Hashable, Sendable {
     }
 }
 
+/// Sensor-fusion payloads exposed in the app. Each case maps to a concrete
+/// `MWLoggable` / `MWStreamable` type in the SDK.
 enum SensorFusionOutput: String, CaseIterable, Sendable, Identifiable {
     case quaternion
     case eulerAngles
@@ -99,6 +103,7 @@ enum SensorFusionOutput: String, CaseIterable, Sendable, Identifiable {
     }
 }
 
+/// Firmware sensor-fusion algorithm modes surfaced in the UI.
 enum SensorFusionMode: String, CaseIterable, Sendable, Identifiable {
     case ndof = "NDoF"
     case imuPlus = "IMU Plus"
@@ -108,6 +113,7 @@ enum SensorFusionMode: String, CaseIterable, Sendable, Identifiable {
     var id: String { rawValue }
 }
 
+/// User-selected sensor configuration for one live or logged channel.
 struct SensorSelection: Identifiable, Sendable, Hashable {
     let id: SensorKey
     var hz: Double

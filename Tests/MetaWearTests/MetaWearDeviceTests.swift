@@ -589,4 +589,3 @@ struct DeviceCommandSequenceTests {
         #expect(new[1] == Data([0x11, 0x07] + Array(payload.dropFirst(13))))
     }
 }
-
