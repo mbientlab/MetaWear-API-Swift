@@ -23,10 +23,24 @@ final class Channel: Identifiable {
     // observed fields below, so the UI updates at a steady 30 fps no
     // matter how fast the board is sampling.
 
-    /// Capture buffer for the chart. Appended-to from the BLE consume task,
-    /// snapshotted into `displayBuffer` by the throttle loop.
+    /// Full-resolution capture buffer. Appended-to from the BLE consume task;
+    /// drives archive-to-history, `latest`, and the true-rate readout.
     @ObservationIgnored
     var ring: RingBuffer<AnyChartSample>
+
+    /// Capped, *decimated* copy of `ring` — the actual plotted series. Fed one
+    /// real sample at a time (1 of every `displayStride`) and only ever
+    /// appended to, so older points scroll FIFO and keep their values instead
+    /// of jumping around the way a per-frame re-downsample would. The throttle
+    /// loop snapshots it into `displayBuffer`.
+    @ObservationIgnored
+    var displayRing: RingBuffer<AnyChartSample>
+
+    /// Keep 1 of every `displayStride` samples in `displayRing`. A live chart
+    /// card resolves only a few hundred points, so a high-rate sensor (e.g.
+    /// 200 Hz accel) is thinned to ~30 plotted Hz; low-rate sensors keep every
+    /// sample (stride 1). Set once from the configured rate.
+    let displayStride: Int
 
     /// Running count of samples received from the consume task. The
     /// throttle loop copies this into the observed `totalSamples`.
@@ -49,5 +63,21 @@ final class Channel: Identifiable {
         self.id = selection.id
         self.selection = selection
         self.ring = RingBuffer(capacity: capacity)
+        // Plot at most ~30 Hz: thin high-rate sensors, keep low-rate ones whole.
+        self.displayStride = max(1, Int((selection.hz / 30).rounded()))
+        self.displayRing = RingBuffer(capacity: 180)
+    }
+
+    /// Ingest a freshly-received sample. Always stored full-resolution in
+    /// `ring`; every `displayStride`-th sample is also mirrored into the
+    /// plotted `displayRing`. Both buffers are `@ObservationIgnored`, so this
+    /// stays off SwiftUI's per-sample invalidation path — the throttle loop
+    /// publishes to the observed fields at a fixed cadence.
+    func ingest(_ sample: AnyChartSample) {
+        ring.append(sample)
+        receivedCount &+= 1
+        if receivedCount % displayStride == 0 {
+            displayRing.append(sample)
+        }
     }
 }
