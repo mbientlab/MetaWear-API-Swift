@@ -129,7 +129,7 @@ public actor MWPersistenceStore {
                 requested: S.persistenceKind
             )
         }
-        return session.samples
+        return (session.samples ?? [])
             .sorted { $0.tickMs < $1.tickMs }
             .map { r in
                 MWLoggedSample(

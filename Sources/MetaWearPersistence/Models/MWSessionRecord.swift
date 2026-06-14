@@ -34,8 +34,11 @@ public final class MWSessionRecord {
     /// field was added.
     public var label: String?
 
+    /// Optional because CloudKit integration requires every relationship —
+    /// including to-many — to be optional. Treat `nil` as "no samples"; the
+    /// store and snapshot accessors coalesce it to an empty array.
     @Relationship(deleteRule: .cascade, inverse: \MWSampleRecord.session)
-    public var samples: [MWSampleRecord] = []
+    public var samples: [MWSampleRecord]? = []
 
     public init(
         id: UUID = UUID(),

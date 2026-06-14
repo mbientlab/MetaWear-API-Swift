@@ -36,7 +36,7 @@ public struct MWSessionSnapshot: Sendable, Identifiable {
         self.sensorKind     = record.sensorKind
         self.startDate      = record.startDate
         self.endDate        = record.endDate
-        self.sampleCount    = record.samples.count
+        self.sampleCount    = record.samples?.count ?? 0
         self.deviceSerial   = record.deviceSerial
         self.deviceModel    = record.deviceModel
         self.deviceFirmware = record.deviceFirmware
