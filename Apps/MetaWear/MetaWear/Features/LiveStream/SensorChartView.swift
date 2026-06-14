@@ -18,6 +18,9 @@ struct SensorChartView: View {
             header
             SensorReadoutChips(channels: axisStyle.channels, latest: latest, unit: axisStyle.unit)
             chart
+                // Extra breathing room between the live x/y/z readout and the
+                // top of the graph, beyond the VStack's uniform spacing.
+                .padding(.top, isCompact ? 6 : 8)
         }
         .glassCard(padding: isCompact ? 10 : 16)
     }
