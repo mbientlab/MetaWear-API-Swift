@@ -26,8 +26,7 @@ tolerated. Report concerns to [hello@mbientlab.com](mailto:hello@mbientlab.com).
 
 **Do not open a public issue for security vulnerabilities.** Use GitHub's private
 vulnerability reporting (the **Security** tab → *Report a vulnerability*) or
-email [hello@mbientlab.com](mailto:hello@mbientlab.com). See
-[`SECURITY.md`](SECURITY.md) if present.
+email [hello@mbientlab.com](mailto:hello@mbientlab.com).
 
 ## Development setup
 
