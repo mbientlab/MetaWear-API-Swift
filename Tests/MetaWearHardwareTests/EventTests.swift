@@ -52,7 +52,7 @@ struct EventTests {
 
             let event = try await device.createEvent(
                 source: .buttonChanged(),
-                action: MWEventAction(command: MWLED.Play())
+                action: try MWEventAction(command: MWLED.Play())
             )
             print("""
 
@@ -237,11 +237,14 @@ struct EventTests {
 
             // Record a macro that, on every replay, sets up a green flash
             // pattern and binds button-change → LED Play.
+            // Built outside the recorder closure so the action validation is
+            // visible in the test setup rather than mixed into macro recording.
+            let playAction = try MWEventAction(command: MWLED.Play())
             let macro = try await device.recordMacro(executeOnBoot: true) { recorder in
                 await recorder.send(MWLED.SetPattern(color: .green, .flash))
-                await recorder.createEvent(
+                try await recorder.createEvent(
                     source: .buttonChanged(),
-                    action: MWEventAction(command: MWLED.Play())
+                    action: playAction
                 )
             }
 

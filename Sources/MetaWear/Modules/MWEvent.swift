@@ -13,7 +13,7 @@ import Foundation
 /// let timer = try await device.createTimer(periodMs: 1000)
 /// let event = try await device.createEvent(
 ///     source: .timerFired(timer),
-///     action: MWEventAction(command: MWLED.Play())
+///     action: try MWEventAction(command: MWLED.Play())
 /// )
 /// try await device.startTimer(timer)
 ///
@@ -112,9 +112,17 @@ public struct MWEventDataToken: Sendable, Equatable {
     /// Byte offset into the destination command's params where the slice is written.
     public let destOffset: UInt8
 
-    public init(length: UInt8, sourceOffset: UInt8 = 0, destOffset: UInt8 = 0) {
-        precondition((1...7).contains(length),  "length must fit in 3 bits (1...7)")
-        precondition(sourceOffset <= 15,        "sourceOffset must fit in 4 bits (0...15)")
+    /// - Throws: `MWError.operationFailed` if `length` or `sourceOffset` fall
+    ///   outside the bit-widths the wire format allows. Bad input is a
+    ///   recoverable error rather than a `precondition` so it cannot crash the
+    ///   host app.
+    public init(length: UInt8, sourceOffset: UInt8 = 0, destOffset: UInt8 = 0) throws {
+        guard (1...7).contains(length) else {
+            throw MWError.operationFailed("MWEventDataToken length must fit in 3 bits (1...7); got \(length)")
+        }
+        guard sourceOffset <= 15 else {
+            throw MWError.operationFailed("MWEventDataToken sourceOffset must fit in 4 bits (0...15); got \(sourceOffset)")
+        }
         self.length       = length
         self.sourceOffset = sourceOffset
         self.destOffset   = destOffset
@@ -147,8 +155,14 @@ public struct MWEventAction: Sendable {
 
     /// Build an action from any `MWCommand`.
     /// Splits `commandData` into (module, register, params).
-    public init(command: any MWCommand) {
+    ///
+    /// - Throws: `MWError.operationFailed` if the command's `commandData` is
+    ///   shorter than the required module + register bytes.
+    public init(command: any MWCommand) throws {
         let data   = command.commandData
+        guard data.count >= 2 else {
+            throw MWError.operationFailed("MWCommand.commandData must include module and register bytes")
+        }
         module     = MWModule(rawValue: data[0]) ?? .debug
         register   = data[1]
         params     = data.count > 2 ? data.advanced(by: 2) : Data()
@@ -183,6 +197,9 @@ public extension MetaWearDevice {
         action: MWEventAction,
         dataToken: MWEventDataToken? = nil
     ) async throws -> MWEvent {
+        guard action.params.count <= Int(UInt8.max) else {
+            throw MWError.operationFailed("Event action parameter payload cannot exceed 255 bytes")
+        }
         // ENTRY: [0x0A, 0x02, src_module, src_register, src_dataID,
         //                      dst_module, dst_register, param_length,
         //                      (optional 2-byte data token)]

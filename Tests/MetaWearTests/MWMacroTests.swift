@@ -178,6 +178,28 @@ struct MacroRecordTests {
     }
 }
 
+// MARK: - MWMacroRecorder event recording
+
+@Suite("MWMacroRecorder — Embedded Events")
+struct MacroRecorderEventTests {
+
+    @Test func createEvent_rejectsOversizedActionPayload() async {
+        let recorder = MWMacroRecorder()
+        let action = MWEventAction(
+            module: .led,
+            register: 0x01,
+            params: Data(repeating: 0xAA, count: Int(UInt8.max) + 1)
+        )
+
+        await #expect(throws: MWError.self) {
+            try await recorder.createEvent(source: .buttonChanged(), action: action)
+        }
+
+        let packets = await recorder.packets
+        #expect(packets.isEmpty == true, "Rejected embedded events must not leave partial macro packets behind")
+    }
+}
+
 // MARK: - executeMacro / eraseAllMacros
 
 @Suite("MetaWearDevice — executeMacro / eraseAllMacros")

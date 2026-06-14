@@ -399,8 +399,12 @@ public enum MWSettings {
         public let bytesLSBFirst: [UInt8]
 
         /// - Parameter bytesLSBFirst: Must be exactly 6 bytes.
-        public init(type: AddressType, bytesLSBFirst: [UInt8]) {
-            precondition(bytesLSBFirst.count == 6, "BluetoothAddress requires exactly 6 bytes")
+        /// - Throws: `MWError.operationFailed` if `bytesLSBFirst` is not exactly
+        ///   6 bytes. Matches the validation already done by ``parse(_:type:)``.
+        public init(type: AddressType, bytesLSBFirst: [UInt8]) throws {
+            guard bytesLSBFirst.count == 6 else {
+                throw MWError.operationFailed("BluetoothAddress requires exactly 6 bytes; got \(bytesLSBFirst.count)")
+            }
             self.type           = type
             self.bytesLSBFirst  = bytesLSBFirst
         }
@@ -422,7 +426,7 @@ public enum MWSettings {
                 displayBytes.append(b)
             }
             // Display order is byte5:byte4:…:byte0; wire is byte0:byte1:…:byte5.
-            return BluetoothAddress(type: type, bytesLSBFirst: Array(displayBytes.reversed()))
+            return try BluetoothAddress(type: type, bytesLSBFirst: Array(displayBytes.reversed()))
         }
 
         /// Canonical colon-separated display form (`"E8:C9:8F:52:7B:07"`).

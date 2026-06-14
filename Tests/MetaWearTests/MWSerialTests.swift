@@ -17,58 +17,75 @@ import Foundation
 @Suite("Serial Passthrough — I2C Write")
 struct SerialI2CWriteTests {
 
-    @Test func moduleAndRegisterBytes() {
-        let cmd = MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA])
+    @Test func moduleAndRegisterBytes() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA])
         #expect(cmd.commandData[0] == 0x0D)  // module
         #expect(cmd.commandData[1] == 0x01)  // register I2C_READ_WRITE
     }
 
-    @Test func addressBytes() {
-        let cmd = MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA])
+    @Test func addressBytes() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA])
         #expect(cmd.commandData[2] == 0x68)  // device address
         #expect(cmd.commandData[3] == 0x6B)  // register address
     }
 
     // The 0xFF at offset 4 is the firmware's signal-id placeholder for plain
     // writes; it's ignored by firmware on write paths but must be present.
-    @Test func placeholderByte_is0xFF() {
-        let cmd = MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA])
+    @Test func placeholderByte_is0xFF() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA])
         #expect(cmd.commandData[4] == 0xFF)
     }
 
-    @Test func lengthByte() {
-        let cmd = MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA, 0xBB])
+    @Test func lengthByte() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA, 0xBB])
         #expect(cmd.commandData[5] == 2)
     }
 
-    @Test func dataBytes() {
-        let cmd = MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA, 0xBB])
+    @Test func dataBytes() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xAA, 0xBB])
         #expect(cmd.commandData[6] == 0xAA)
         #expect(cmd.commandData[7] == 0xBB)
     }
 
-    @Test func totalLength_oneDataByte() {
-        let cmd = MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0x00])
+    @Test func totalLength_oneDataByte() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0x00])
         // [module, register, dev, reg, 0xFF, length, data] = 7 bytes
         #expect(cmd.commandData.count == 7)
     }
 
-    @Test func totalLength_threeDataBytes() {
-        let cmd = MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0x01, 0x02, 0x03])
+    @Test func totalLength_threeDataBytes() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0x01, 0x02, 0x03])
         #expect(cmd.commandData.count == 9)
     }
 
-    @Test func emptyData() {
-        let cmd = MWSerial.I2CWrite(deviceAddress: 0x10, registerAddress: 0x00, data: [])
+    @Test func emptyData() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x10, registerAddress: 0x00, data: [])
         #expect(cmd.commandData.count == 6)
         #expect(cmd.commandData[4] == 0xFF)  // placeholder still present
         #expect(cmd.commandData[5] == 0)     // length = 0
     }
 
     // Exact byte-vector check covering the full I2C write shape.
-    @Test func fullVector() {
-        let cmd = MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xDE, 0xAD])
+    @Test func fullVector() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0xDE, 0xAD])
         #expect(cmd.commandData == Data([0x0D, 0x01, 0x68, 0x6B, 0xFF, 0x02, 0xDE, 0xAD]))
+    }
+
+    // Firmware buffers at most 10 data bytes per write (register table:
+    // "Data Length (max 10)"). Exactly 10 is allowed; 11 must throw rather than
+    // crash the host with a precondition.
+    @Test func maxPayload_tenBytesAllowed() throws {
+        let cmd = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B,
+                                        data: Array(repeating: 0xAA, count: 10))
+        #expect(cmd.commandData[5] == 10)
+        #expect(cmd.commandData.count == 16)
+    }
+
+    @Test func overlongPayload_throws() {
+        #expect(throws: MWError.self) {
+            _ = try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B,
+                                      data: Array(repeating: 0xAA, count: 11))
+        }
     }
 }
 

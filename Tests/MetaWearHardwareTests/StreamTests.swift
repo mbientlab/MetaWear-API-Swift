@@ -158,9 +158,9 @@ private extension BoschFeatureStream {
     /// shared with any-motion; the feature-enable bit (`0x20`) selects
     /// no-motion.
     static func noMotionBMI270(rangeG: Float = 2.0)
-        -> BoschFeatureStream<UInt8>
+        throws -> BoschFeatureStream<UInt8>
     {
-        let configure = MWAccelerometerBMI270Features.ConfigureNoMotion()
+        let configure = try MWAccelerometerBMI270Features.ConfigureNoMotion()
         let enable    = MWAccelerometerBMI270Features.EnableNoMotion()
         let disable   = MWAccelerometerBMI270Features.DisableNoMotion()
 
@@ -506,7 +506,7 @@ struct StreamTests {
 
             """)
 
-            let sensor = BoschFeatureStream<UInt8>.noMotionBMI270()
+            let sensor = try BoschFeatureStream<UInt8>.noMotionBMI270()
             let stream = try await device.startStream(sensor)
 
             var count = 0

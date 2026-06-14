@@ -388,21 +388,19 @@ try await device.send(MWAccelerometerBMI270Features.ConfigureWristWakeup())
 try await device.send(MWAccelerometerBMI270Features.EnableWristWakeup())
 
 // No-motion (register 0x09, bit 0x20) — distinct from any-motion (bit 0x40)
-try await device.send(
-    MWAccelerometerBMI270Features.ConfigureNoMotion(
-        duration: 5, threshold: 0xAA,
-        selectX: true, selectY: true, selectZ: true
-    )
+let noMotion = try MWAccelerometerBMI270Features.ConfigureNoMotion(
+    duration: 5, threshold: 0xAA,
+    selectX: true, selectY: true, selectZ: true
 )
+try await device.send(noMotion)
 try await device.send(MWAccelerometerBMI270Features.EnableNoMotion())
 
 // FIFO downsampling (register 0x11) — reduce logged sample rate per axis-group
-try await device.send(
-    MWAccelerometerBMI270Features.SetDownsampling(
-        gyroOrdinal: 2, gyroFilterData: true,
-        accOrdinal: 2,  accFilterData: true
-    )
+let downsampling = try MWAccelerometerBMI270Features.SetDownsampling(
+    gyroOrdinal: 2, gyroFilterData: true,
+    accOrdinal: 2,  accFilterData: true
 )
+try await device.send(downsampling)
 ```
 
 ### Magnetometer (BMM150)
@@ -580,7 +578,7 @@ let timer = try await device.createTimer(periodMs: 500)
 try await device.send(MWLED.SetPattern(color: .green, .blink))
 let event = try await device.createEvent(
     source: .timerFired(timer),
-    action: MWEventAction(command: MWLED.Play())
+    action: try MWEventAction(command: MWLED.Play())
 )
 try await device.startTimer(timer)
 
@@ -604,7 +602,7 @@ Without a token the destination params are written as-is.
 let event = try await device.createEvent(
     source: .timerFired(timer),
     action: action,
-    dataToken: MWEventDataToken(length: 4, sourceOffset: 2, destOffset: 3)
+    dataToken: try MWEventDataToken(length: 4, sourceOffset: 2, destOffset: 3)
 )
 // Constraints: length 1…7 (3 bits), sourceOffset 0…15 (4 bits), destOffset any UInt8
 ```
@@ -650,9 +648,9 @@ the firmware re-creates the event binding every time the macro runs.
 // Bind button → green LED flash, persisted across reboots
 let macro = try await device.recordMacro(executeOnBoot: true) { recorder in
     await recorder.send(MWLED.SetPattern(color: .green, .flash))
-    await recorder.createEvent(
+    try await recorder.createEvent(
         source: .buttonChanged(),
-        action: MWEventAction(command: MWLED.Play())
+        action: try MWEventAction(command: MWLED.Play())
     )
 }
 ```
@@ -671,7 +669,7 @@ Communicate with external sensors or ICs wired to the MetaWear's I2C or SPI bus.
 
 ```swift
 // Write 0x00 to register 0x6B of the device at I2C address 0x68 (e.g. wake an MPU-6050)
-try await device.send(MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0x00]))
+try await device.send(try MWSerial.I2CWrite(deviceAddress: 0x68, registerAddress: 0x6B, data: [0x00]))
 ```
 
 #### I2C read
@@ -784,7 +782,7 @@ try await device.removeAllProcessors()
 | Buffer        | `MWDataProcessor.Buffer`      | Hold last sample (read on demand or fused)                |
 | Packer        | `MWDataProcessor.Packer`      | Pack N samples per BLE packet                             |
 | Accounter     | `MWDataProcessor.Accounter`   | Prepend timestamp or packet counter                       |
-| Fuser         | `MWDataProcessor.Fuser`       | Combine latest primary + buffered secondaries             |
+| Fuser         | `MWDataProcessor.Fuser`       | Combine latest primary + up to 12 buffered secondaries    |
 
 Chaining — `MWProcessorHandle` conforms to `MWSignal`, so any processor's output can feed directly into the next `createProcessor` call. 
 The handle carries the board-assigned ID plus the output channel count, channel width, and signedness so the next stage's config bytes are computed correctly without any manual bookkeeping.

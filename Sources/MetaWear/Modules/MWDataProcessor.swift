@@ -977,12 +977,19 @@ public extension MWDataProcessor {
         /// Buffer processor IDs (max 12) that feed the secondary inputs, in order.
         public let bufferIDs: [UInt8]
 
-        public init(bufferIDs: [UInt8]) { self.bufferIDs = bufferIDs }
+        /// - Throws: `MWError.operationFailed` if more than 12 buffer references
+        ///   are supplied. The fuser config has exactly 12 reference slots.
+        public init(bufferIDs: [UInt8]) throws {
+            guard bufferIDs.count <= 12 else {
+                throw MWError.operationFailed("Fuser supports at most 12 buffer references; got \(bufferIDs.count)")
+            }
+            self.bufferIDs = bufferIDs
+        }
 
         public let typeID: UInt8 = 0x1B
         public func configBytes(inputLength: UInt8, inputChannels: UInt8, inputSigned: Bool) -> [UInt8] {
-            let count = UInt8(min(bufferIDs.count, 12))
-            var refs = Array(bufferIDs.prefix(12))
+            let count = UInt8(bufferIDs.count)
+            var refs = bufferIDs
             while refs.count < 12 { refs.append(0) }
             return [count & 0x0F] + refs
         }

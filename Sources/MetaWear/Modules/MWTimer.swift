@@ -146,7 +146,7 @@ enum MWTimerCommand {
 extension AsyncThrowingStream where Element == Data, Failure == Error {
     func compactMap<T: Sendable>(_ transform: @escaping @Sendable (Data) -> T?) -> AsyncThrowingStream<T, Error> {
         let (stream, continuation) = AsyncThrowingStream<T, Error>.makeStream()
-        Task {
+        let task = Task {
             do {
                 for try await element in self {
                     if let mapped = transform(element) { continuation.yield(mapped) }
@@ -156,6 +156,7 @@ extension AsyncThrowingStream where Element == Data, Failure == Error {
                 continuation.finish(throwing: error)
             }
         }
+        continuation.onTermination = { _ in task.cancel() }
         return stream
     }
 }

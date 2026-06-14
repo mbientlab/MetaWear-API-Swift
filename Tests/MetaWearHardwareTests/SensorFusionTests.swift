@@ -44,6 +44,77 @@ private func fusionChip(for device: MetaWearDevice) async -> MWSensorFusionChip 
     return .bmi160
 }
 
+// MARK: - Multiple outputs
+//
+// The sensor-fusion output-enable register is a bit mask. Enabling a second
+// output should add that output to the same running fusion engine, not
+// reconfigure or stop the first output.
+
+@Suite("Sensor Fusion — Multiple Outputs", .serialized)
+struct SensorFusionMultipleOutputTests {
+
+    @Test @MainActor
+    func quaternionAndEuler_canStreamTogether() async throws {
+        try await withConnectedDevice { device in
+            try #require(await device.hasSensorFusion,
+                         "sensor fusion not present on this board")
+            let mode = await fusionMode(for: device)
+            let chip = await fusionChip(for: device)
+            let quaternion = MWSensorFusionQuaternion(mode: mode, chip: chip)
+            let euler = MWSensorFusionEuler(mode: mode, chip: chip)
+
+            let quaternionStream = try await device.startStream(quaternion)
+            let eulerStream = try await device.startStream(euler)
+
+            var quaternionCount = 0
+            var eulerCount = 0
+            let quaternionCollector = Task { @MainActor in
+                do {
+                    for try await _ in quaternionStream {
+                        quaternionCount += 1
+                    }
+                } catch { }
+            }
+            let eulerCollector = Task { @MainActor in
+                do {
+                    for try await _ in eulerStream {
+                        eulerCount += 1
+                    }
+                } catch { }
+            }
+            defer {
+                quaternionCollector.cancel()
+                eulerCollector.cancel()
+            }
+
+            try await Task.sleep(for: .seconds(2))
+            #expect(quaternionCount >= 5,
+                    "Expected quaternion samples while euler was also enabled, got \(quaternionCount)")
+            #expect(eulerCount >= 5,
+                    "Expected euler samples while quaternion was also enabled, got \(eulerCount)")
+
+            try await device.stopStreaming(quaternion)
+            let stateAfterFirstStop = await device.state
+            let eulerAtQuaternionStop = eulerCount
+
+            try await Task.sleep(for: .seconds(1))
+            let eulerAfterQuaternionStop = eulerCount
+            #expect(stateAfterFirstStop == .streaming,
+                    "Stopping one fusion output should leave the device streaming, got \(stateAfterFirstStop)")
+            #expect(eulerAfterQuaternionStop > eulerAtQuaternionStop,
+                    "Euler should continue after quaternion stops; before=\(eulerAtQuaternionStop), after=\(eulerAfterQuaternionStop)")
+
+            try await device.stopStreaming(euler)
+            let finalState = await device.state
+            #expect(finalState == .idle,
+                    "Stopping the last fusion output should return to .idle, got \(finalState)")
+
+            print("\n  Fusion multi-output (\(mode)): " +
+                  "quaternion=\(quaternionCount), euler=\(eulerAfterQuaternionStop)\n")
+        }
+    }
+}
+
 // MARK: - Quaternion
 //
 // Non-packed quaternion signal — register 0x07.
