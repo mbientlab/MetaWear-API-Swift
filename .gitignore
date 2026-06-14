@@ -1,7 +1,40 @@
+# macOS
 .DS_Store
+
+# Xcode / build artifacts
 /.build
 /Packages
-xcuserdata/
+build/
 DerivedData/
+xcuserdata/
+*.moved-aside
+*.hmap
+*.dSYM
+*.dSYM.zip
+*.ipa
+timeline.xctimeline
+
+# Swift Package Manager
 .swiftpm/
+
+# Secrets & code-signing (never commit these)
 .netrc
+.env
+*.env
+Secrets.swift
+*.pem
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+
+# AI assistant tooling (kept local, not published)
+CLAUDE.md
+AGENTS.md
+.claude/
+.cursor/
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
