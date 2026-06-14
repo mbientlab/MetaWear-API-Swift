@@ -15,13 +15,11 @@ nonisolated enum LiveBufferCSVExporter {
     /// Write one CSV per non-empty snapshot to a temp file. Safe to call off
     /// the main actor — the snapshots are value-typed and self-contained.
     /// Returns one `ExportSheetItem` per file actually written; empty
-    /// snapshots and failed writes are skipped silently.
-    static func write(snapshots: [ChannelSnapshot], deviceName: String) -> [ExportSheetItem] {
+    /// snapshots are skipped.
+    static func write(snapshots: [ChannelSnapshot], deviceName: String) throws -> [ExportSheetItem] {
         var items: [ExportSheetItem] = []
         let now = Date.now
-        print("[Export] snapshots=\(snapshots.count) device=\(deviceName)")
         for snapshot in snapshots {
-            print("[Export]   \(snapshot.key) samples=\(snapshot.samples.count)")
             guard !snapshot.samples.isEmpty else { continue }
             let csv = makeCSV(snapshot: snapshot)
             let filename = ExportFilename.make(
@@ -32,18 +30,21 @@ nonisolated enum LiveBufferCSVExporter {
             let url = URL.temporaryDirectory.appending(path: filename)
             do {
                 try csv.write(to: url, atomically: true, encoding: .utf8)
-                print("[Export]   wrote \(url.lastPathComponent) (\(csv.utf8.count) bytes)")
                 items.append(ExportSheetItem(
                     url: url,
                     subtitle: "\(snapshot.samples.count) samples · \(snapshot.displayName)"
                 ))
             } catch {
-                print("[Export]   FAILED \(url.path): \(error)")
-                continue
+                throw ExportWriteError(filename: filename, underlying: error)
             }
         }
-        print("[Export] done — \(items.count) file(s)")
         return items
+    }
+
+    static func writeAsync(snapshots: [ChannelSnapshot], deviceName: String) async throws -> [ExportSheetItem] {
+        try await Task.detached(priority: .utility) {
+            try write(snapshots: snapshots, deviceName: deviceName)
+        }.value
     }
 
     private static func makeCSV(snapshot: ChannelSnapshot) -> String {
@@ -94,5 +95,14 @@ nonisolated enum LiveBufferCSVExporter {
 
     private static func format(_ value: Float) -> String {
         value.formatted(.number.precision(.fractionLength(0...6)))
+    }
+
+    private struct ExportWriteError: LocalizedError {
+        let filename: String
+        let underlying: Error
+
+        var errorDescription: String? {
+            "Could not write \(filename): \(underlying.localizedDescription)"
+        }
     }
 }

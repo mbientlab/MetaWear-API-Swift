@@ -1,9 +1,14 @@
 import SwiftUI
 
-struct ExportSheetItem: Identifiable {
+struct ExportSheetItem: Identifiable, Sendable {
     let id = UUID()
     let url: URL
     let subtitle: String
+}
+
+struct ExportResult: Identifiable, Sendable {
+    let id = UUID()
+    let items: [ExportSheetItem]
 }
 
 struct ExportSheet: View {

@@ -15,6 +15,7 @@ struct DeviceSettingsView: View {
     @State private var logEntryCount: UInt32?
     @State private var activeLoggerCount: Int?
     @State private var isClearing = false
+    @State private var clearLogError: AppError?
 
     var body: some View {
         Form {
@@ -91,6 +92,11 @@ struct DeviceSettingsView: View {
                 Text("Any logger subscriptions and pending entries will be removed from the board.")
             }
         }
+        .alert(item: $clearLogError) { err in
+            Alert(title: Text("Clear logs failed"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
+        }
     }
 
     /// Read `LOG_LENGTH` and enumerate active loggers so the section
@@ -109,10 +115,14 @@ struct DeviceSettingsView: View {
         guard let device = appStore.activeDevice else { return }
         isClearing = true
         defer { isClearing = false }
-        try? await device.clearLog()
-        deleteLocalPendingRecords(for: device.identifier)
-        appStore.refreshPendingLogSessions()
-        await refreshLogStats()
+        do {
+            try await device.clearLog()
+            deleteLocalPendingRecords(for: device.identifier)
+            appStore.refreshPendingLogSessions()
+            await refreshLogStats()
+        } catch {
+            clearLogError = AppError(error: error)
+        }
     }
 
     private func deleteLocalPendingRecords(for deviceID: UUID) {

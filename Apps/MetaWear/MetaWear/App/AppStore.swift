@@ -145,16 +145,35 @@ final class AppStore {
         // app's own UI handles teardown.
         if anyPendingForDevice { return }
 
-        let entryCount = (try? await device.read(MWLogLength()).value) ?? 0
+        let entryCount: UInt32
+        do {
+            entryCount = try await device.read(MWLogLength()).value
+        } catch {
+            lastError = AppError(error: error)
+            return
+        }
         guard entryCount > 0 else { return }
 
-        let activeLoggers = (try? await device.queryActiveLoggers()) ?? []
+        let activeLoggers: [ActiveLogger]
+        do {
+            activeLoggers = try await device.queryActiveLoggers()
+        } catch {
+            // Enumeration failed, so we cannot prove the entries are
+            // undecodable garbage. Keep the on-board data and surface the
+            // orphan flow instead of clearing recoverable logs.
+            orphanLogState = OrphanLogState(entryCount: entryCount, deviceID: id)
+            return
+        }
         if activeLoggers.isEmpty {
             // Entries with no logger subscriptions are guaranteed
             // garbage — there's no decoder anywhere that could turn
             // them into samples. Drop them so we don't re-alert on
             // every reconnect.
-            try? await device.clearLog()
+            do {
+                try await device.clearLog()
+            } catch {
+                lastError = AppError(error: error)
+            }
             return
         }
 
@@ -177,8 +196,13 @@ final class AppStore {
             orphanLogState = nil
             return
         }
-        try? await device.clearLog()
-        orphanLogState = nil
+        do {
+            try await device.clearLog()
+            orphanLogState = nil
+        } catch {
+            orphanLogState = state
+            lastError = AppError(error: error)
+        }
     }
 
     /// Dismiss the orphan-log alert without touching the board. Subsequent
@@ -213,7 +237,7 @@ final class AppStore {
                 // logger metadata — typically a corrupt slot or a logger
                 // type we don't decode yet. Clear so we don't keep re-
                 // alerting on every reconnect.
-                try? await device.clearLog()
+                try await device.clearLog()
                 orphanDownloadPhase = .completed(savedCount: 0)
                 return
             }
@@ -241,7 +265,7 @@ final class AppStore {
                 }
             }
 
-            try? await device.clearLog()
+            try await device.clearLog()
             orphanDownloadPhase = .completed(savedCount: savedCount)
         } catch {
             orphanDownloadPhase = .failed(message: error.localizedDescription)

@@ -28,34 +28,39 @@ final class LogSessionViewModel {
     }
 
     func start(_ selections: [SensorSelection]) async {
-        print("[Log] start phase=\(phase) selections=\(selections.count)")
         guard case .idle = phase else {
-            print("[Log] start refused — phase is not .idle")
             return
         }
         let context = containers.local.mainContext
         let modules = await device.modules
         let chip = MWSensorFusionChip(accImpl: modules[.accelerometer]?.implementation ?? 1) ?? .bmi160
-        print("[Log] chip=\(chip) accImpl=\(modules[.accelerometer]?.implementation ?? 0)")
         var records: [LogSessionRecord] = []
         do {
             for selection in selections {
-                print("[Log] startOne \(selection.id) hz=\(selection.hz) range=\(selection.range ?? -1)")
                 if let record = try await startOne(selection: selection, chip: chip, context: context) {
                     records.append(record)
-                    print("[Log]   record inserted")
-                } else {
-                    print("[Log]   startOne returned nil")
                 }
             }
             try context.save()
             activeRecords = records
             phase = .running(startedAt: .now)
             startElapsedTimer()
-            print("[Log] phase -> running, records=\(records.count)")
         } catch {
-            print("[Log] start FAILED: \(error)")
-            lastError = AppError(error: error)
+            let stillRunning = await rollbackStartedRecords(records, chip: chip, context: context)
+            if stillRunning.isEmpty {
+                activeRecords = []
+                phase = .idle
+                lastError = AppError(error: error)
+            } else {
+                activeRecords = stillRunning
+                let earliestStart = stillRunning.map(\.startDate).min() ?? .now
+                phase = .running(startedAt: earliestStart)
+                startElapsedTimer()
+                lastError = AppError(error: PartialStartRollbackError(
+                    startError: error,
+                    remainingCount: stillRunning.count
+                ))
+            }
         }
     }
 
@@ -169,6 +174,25 @@ final class LogSessionViewModel {
         }
     }
 
+    private func rollbackStartedRecords(
+        _ records: [LogSessionRecord],
+        chip: MWSensorFusionChip,
+        context: ModelContext
+    ) async -> [LogSessionRecord] {
+        var stillRunning: [LogSessionRecord] = []
+        for record in records {
+            do {
+                try await stopOne(record: record, chip: chip)
+                context.delete(record)
+            } catch {
+                record.status = .running
+                stillRunning.append(record)
+            }
+        }
+        try? context.save()
+        return stillRunning
+    }
+
     /// Translate a user-facing Hz selection (one of 0.5, 1, 2, 5) into the
     /// board's timer period in ms. Clamps to ≥ 200 ms so a stray 0 from
     /// the picker can't generate a 0-period timer (which the firmware
@@ -204,6 +228,16 @@ final class LogSessionViewModel {
                 }
                 try? await Task.sleep(for: .seconds(1))
             }
+        }
+    }
+
+    private struct PartialStartRollbackError: LocalizedError {
+        let startError: Error
+        let remainingCount: Int
+
+        var errorDescription: String? {
+            let noun = remainingCount == 1 ? "logger is" : "loggers are"
+            return "Logging did not start cleanly: \(startError.localizedDescription). \(remainingCount) \(noun) still running on the board; stop or download before starting another session."
         }
     }
 

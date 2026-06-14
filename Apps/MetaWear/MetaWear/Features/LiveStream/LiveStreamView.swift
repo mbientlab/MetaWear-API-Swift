@@ -10,6 +10,7 @@ struct LiveStreamView: View {
     /// is bound to the result that was just produced — avoids the stale-state
     /// timing where `.sheet(isPresented:)` captures an old `exportItems`.
     @State private var exportResult: ExportResult?
+    @State private var exportError: AppError?
     @State private var isExporting = false
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
@@ -79,6 +80,19 @@ struct LiveStreamView: View {
         .sheet(item: $exportResult) { result in
             ExportSheet(items: result.items)
         }
+        .alert(item: Binding(
+            get: { viewModel?.lastError },
+            set: { viewModel?.lastError = $0 }
+        )) { err in
+            Alert(title: Text("Live stream failed"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
+        }
+        .alert(item: $exportError) { err in
+            Alert(title: Text("Export failed"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
+        }
         .task {
             guard let device = appStore.activeDevice else { return }
             if viewModel == nil {
@@ -122,17 +136,15 @@ struct LiveStreamView: View {
             )
         }
         isExporting = true
-        Task.detached {
-            let items = LiveBufferCSVExporter.write(snapshots: snapshots, deviceName: deviceName)
-            await MainActor.run {
+        Task {
+            do {
+                let items = try await LiveBufferCSVExporter.writeAsync(snapshots: snapshots, deviceName: deviceName)
                 isExporting = false
                 exportResult = ExportResult(items: items)
+            } catch {
+                isExporting = false
+                exportError = AppError(error: error)
             }
         }
     }
-}
-
-struct ExportResult: Identifiable {
-    let id = UUID()
-    let items: [ExportSheetItem]
 }

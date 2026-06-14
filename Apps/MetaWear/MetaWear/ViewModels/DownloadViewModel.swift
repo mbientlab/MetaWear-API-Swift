@@ -15,7 +15,7 @@ final class DownloadViewModel {
         /// "123 / 456 entries (27%)" without waiting for the first
         /// firmware progress notification to arrive.
         case downloading(progress: Double, downloaded: Int, total: Int)
-        case ready(snapshots: [MWSessionSnapshot])
+        case ready(snapshots: [MWSessionSnapshot], warning: String?)
         case failed(message: String)
     }
 
@@ -44,7 +44,7 @@ final class DownloadViewModel {
     /// one sensor's data after logging two.
     func downloadAll(records: [LogSessionRecord]) async {
         guard !records.isEmpty else {
-            phase = .ready(snapshots: [])
+            phase = .ready(snapshots: [], warning: nil)
             return
         }
         phase = .downloading(progress: 0, downloaded: 0, total: 0)
@@ -62,7 +62,14 @@ final class DownloadViewModel {
         //    Enumerate the board's logger slots ONCE and share the result —
         //    every enumeration ends with one timed-out probe, so per-record
         //    enumeration multiplied that stall by the number of sensors.
-        let activeLoggers = (try? await device.queryActiveLoggers()) ?? []
+        let activeLoggers: [ActiveLogger]
+        do {
+            activeLoggers = try await device.queryActiveLoggers()
+        } catch {
+            phase = .failed(message: error.localizedDescription)
+            lastError = AppError(error: error)
+            return
+        }
         for record in records {
             await recoverLoggers(for: record, chip: chip, active: activeLoggers)
         }
@@ -80,6 +87,7 @@ final class DownloadViewModel {
 
         // 3. Decode + save per record.
         var snapshots: [MWSessionSnapshot] = []
+        var keptBoardData = false
         for record in records {
             do {
                 if let snap = try await decodeAndSave(
@@ -92,11 +100,22 @@ final class DownloadViewModel {
                     record.status = .downloaded
                 } else {
                     record.status = .stopped
+                    keptBoardData = true
                 }
             } catch {
-                record.status = .failed
+                record.status = .stopped
+                keptBoardData = true
                 lastError = AppError(error: error)
             }
+        }
+
+        try? containers.local.mainContext.save()
+        if keptBoardData {
+            phase = .ready(
+                snapshots: snapshots,
+                warning: "Some log data could not be decoded. Board data was kept so you can retry Download or clear it from Settings."
+            )
+            return
         }
 
         // 4. Drop the on-flash entries + on-board logger triggers we just
@@ -105,12 +124,17 @@ final class DownloadViewModel {
         //    only stops the sampling sensor, not the logger subscriptions.
         //    Without this, the next `startLogging` would throw "already
         //    being logged" (the registry still has these keys) and the
-        //    board's 8 logger slots stay occupied. Best-effort: a failure
-        //    here doesn't invalidate the downloaded snapshots.
-        try? await device.clearLog()
-
-        try? containers.local.mainContext.save()
-        phase = .ready(snapshots: snapshots)
+        //    board's 8 logger slots stay occupied.
+        do {
+            try await device.clearLog()
+            phase = .ready(snapshots: snapshots, warning: nil)
+        } catch {
+            lastError = AppError(error: error)
+            phase = .ready(
+                snapshots: snapshots,
+                warning: "Downloaded data was saved, but the board logs could not be cleared. Retry clearing from Settings before starting another logging session."
+            )
+        }
     }
 
     /// Drain `device.downloadLogs()` into a single accumulated entries array,

@@ -44,6 +44,10 @@ struct LoggingPill: View {
     private func elapsed(from start: Date) -> String {
         let elapsed = Int(now.timeIntervalSince(start))
         let m = elapsed / 60, s = elapsed % 60
-        return String(format: "%02d:%02d", m, s)
+        return "\(twoDigits(m)):\(twoDigits(s))"
+    }
+
+    private func twoDigits(_ value: Int) -> String {
+        value < 10 ? "0\(value)" : "\(value)"
     }
 }

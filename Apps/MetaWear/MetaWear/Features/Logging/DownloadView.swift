@@ -10,6 +10,8 @@ struct DownloadView: View {
     /// finished snapshots can also offer a ShareLink without a second tap
     /// or a follow-up sheet.
     @State private var exportItems: [UUID: URL] = [:]
+    @State private var exportFailures: Set<UUID> = []
+    @State private var exportError: AppError?
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
 
@@ -22,8 +24,8 @@ struct DownloadView: View {
                         ContentUnavailableView("No download yet", systemImage: "arrow.down.circle")
                     case .downloading(let progress, let downloaded, let total):
                         progressView(progress: progress, downloaded: downloaded, total: total)
-                    case .ready(let snapshots):
-                        readyView(snapshots: snapshots)
+                    case .ready(let snapshots, let warning):
+                        readyView(snapshots: snapshots, warning: warning)
                     case .failed(let message):
                         ContentUnavailableView("Download failed",
                                                systemImage: "exclamationmark.triangle",
@@ -56,9 +58,14 @@ struct DownloadView: View {
             // Build the CSV temp files up front so each row in the ready
             // view can hand a ShareLink a finished URL — avoids a second
             // tap on an Export CSV button to materialise them.
-            if case .ready(let snapshots) = viewModel?.phase {
+            if case .ready(let snapshots, _) = viewModel?.phase {
                 await prepareExports(snapshots: snapshots)
             }
+        }
+        .alert(item: $exportError) { err in
+            Alert(title: Text("CSV export failed"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
         }
     }
 
@@ -99,7 +106,7 @@ struct DownloadView: View {
     }
 
     @ViewBuilder
-    private func readyView(snapshots: [MWSessionSnapshot]) -> some View {
+    private func readyView(snapshots: [MWSessionSnapshot], warning: String?) -> some View {
         VStack(spacing: isCompact ? 8 : 12) {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark.seal.fill")
@@ -110,11 +117,23 @@ struct DownloadView: View {
             }
             .padding(.horizontal, 4)
 
+            if let warning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(Palette.warning)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+
             // One glass card per session, matching the per-channel chart
             // card layout in LiveStreamView.
             GlassEffectContainer {
                 ForEach(snapshots, id: \.id) { snap in
-                    SessionDownloadCard(snapshot: snap, csvURL: exportItems[snap.id])
+                    SessionDownloadCard(
+                        snapshot: snap,
+                        csvURL: exportItems[snap.id],
+                        exportFailed: exportFailures.contains(snap.id)
+                    )
                 }
             }
         }
@@ -122,15 +141,21 @@ struct DownloadView: View {
 
     private func prepareExports(snapshots: [MWSessionSnapshot]) async {
         var built: [UUID: URL] = [:]
+        var failures = Set<UUID>()
         for snapshot in snapshots {
-            if let url = try? await CSVExporter.exportToTempFile(
-                store: appStore.persistence,
-                snapshot: snapshot
-            ) {
+            do {
+                let url = try await CSVExporter.exportToTempFile(
+                    store: appStore.persistence,
+                    snapshot: snapshot
+                )
                 built[snapshot.id] = url
+            } catch {
+                failures.insert(snapshot.id)
+                exportError = AppError(error: error)
             }
         }
         exportItems = built
+        exportFailures = failures
     }
 }
 
@@ -141,6 +166,7 @@ struct DownloadView: View {
 private struct SessionDownloadCard: View {
     let snapshot: MWSessionSnapshot
     let csvURL: URL?
+    let exportFailed: Bool
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -165,6 +191,12 @@ private struct SessionDownloadCard: View {
                 }
                 .buttonStyle(.glass)
                 .accessibilityLabel("Share CSV for \(snapshot.label ?? snapshot.sensorKind)")
+            } else if exportFailed {
+                Label("CSV unavailable", systemImage: "exclamationmark.triangle.fill")
+                    .labelStyle(.iconOnly)
+                    .font(.title3)
+                    .foregroundStyle(Palette.warning)
+                    .accessibilityLabel("CSV export failed for \(snapshot.label ?? snapshot.sensorKind)")
             } else {
                 ProgressView()
                     .controlSize(.small)

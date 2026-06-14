@@ -18,7 +18,7 @@ final class DeviceViewModel {
     /// BMI160 vs BMI270 for the accelerometer), and their revision.
     var modules: [MWModule: MWModuleInfo] = [:]
 
-    private var batteryPollTask: Task<Void, Never>?
+    @ObservationIgnored private let batteryPoller = BatteryPoller()
 
     init(device: MetaWearDevice, appStore: AppStore) {
         self.device = device
@@ -99,17 +99,32 @@ final class DeviceViewModel {
 
     private func startBatteryPolling() {
         stopBatteryPolling()
-        batteryPollTask = Task { @MainActor [weak self] in
+        batteryPoller.task = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { return }
-                await self?.refreshBattery()
+                guard let self else { return }
+                await refreshBattery()
             }
         }
     }
 
     private func stopBatteryPolling() {
-        batteryPollTask?.cancel()
-        batteryPollTask = nil
+        batteryPoller.cancel()
+    }
+
+    private final class BatteryPoller {
+        var task: Task<Void, Never>? {
+            didSet { oldValue?.cancel() }
+        }
+
+        deinit {
+            task?.cancel()
+        }
+
+        func cancel() {
+            task?.cancel()
+            task = nil
+        }
     }
 }

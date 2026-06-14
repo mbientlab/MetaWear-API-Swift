@@ -154,7 +154,7 @@ struct ConnectivityTests {
         try await withConnectedDevice { device in
             let info = await device.moduleInfo(for: .accelerometer)
             
-            print("\n  Accelerometer is present: \(info?.isPresent, default: "false")\n")
+            print("\n  Accelerometer is present: \(info?.isPresent ?? false)\n")
             
             #expect(info != nil)
             #expect(info?.isPresent == true)

@@ -150,7 +150,6 @@ struct LogSessionView: View {
         switch viewModel?.phase ?? .idle {
         case .idle:
             Button("Start", systemImage: "record.circle.fill") {
-                print("[Log] Start tapped — viewModel=\(viewModel != nil) selections=\(selections.count)")
                 Task {
                     await viewModel?.start(selections)
                     // Refresh the AppStore's pending-sessions cache so the
