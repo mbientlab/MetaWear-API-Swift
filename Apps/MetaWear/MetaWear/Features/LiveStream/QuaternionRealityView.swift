@@ -4,11 +4,9 @@ import MetaWear
 
 /// Live 3D orientation visualisation driven by quaternion samples.
 ///
-/// Loads `MetaMotion.usdz` from the app bundle when present — drop a USDZ
-/// file (converted from the MetaMotion STEP via Reality Converter or Blender's
-/// USD exporter) into the Xcode project to replace the procedural placeholder.
-/// The placeholder is a rounded white box approximating a MetaMotion S
-/// (≈24 × 12 × 33 mm) with a subtle LED accent strip on the front face.
+/// Loads `MetaMotion.usdz` from the app bundle when present. Otherwise it uses
+/// a procedural MetaMotion-style rectangular board so the live orientation view
+/// still reads as real MetaWear hardware.
 struct QuaternionRealityView: View {
     let latest: AnyChartSample?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -41,7 +39,7 @@ struct QuaternionRealityView: View {
                 entity.orientation = q
             } else {
                 entity.move(
-                    to: Transform(scale: .one, rotation: q, translation: entity.position),
+                    to: Transform(scale: entity.scale, rotation: q, translation: entity.position),
                     relativeTo: entity.parent,
                     duration: 0.05,
                     timingFunction: .linear
@@ -57,9 +55,9 @@ struct QuaternionRealityView: View {
 
     /// Build the entity placed at scene origin. If a `MetaMotion.usdz` resource
     /// ships in the bundle it's loaded and re-centered; otherwise we build a
-    /// procedural MetaMotion-shaped placeholder.
+    /// procedural MetaMotion-style rectangular board.
     ///
-    /// TODO: Ship the real MetaMotion 3D model.
+    /// To ship the real CAD-derived model later:
     ///   1. Convert the STEP file → USDZ using Apple's Reality Converter
     ///      (drag-and-drop STEP, export USDZ) or Blender's USD exporter.
     ///   2. Drag `MetaMotion.usdz` into the Xcode project and confirm it's a
@@ -72,49 +70,96 @@ struct QuaternionRealityView: View {
     private static func makeEntity() async -> Entity {
         if let url = Bundle.main.url(forResource: "MetaMotion", withExtension: "usdz"),
            let entity = try? await Entity(contentsOf: url) {
-            recenterAndScale(entity, targetLongestEdge: 0.18)
-            entity.position = [0, 0, -0.35]
+            recenterAndScale(entity, targetLongestEdge: 1.25)
+            entity.position = [0, 0, -0.45]
             return entity
         }
-        return makeProceduralBoard()
+        return makeMetaMotionBoard()
     }
 
-    /// Procedural MetaMotion-S placeholder. Proportions match the real
-    /// 24 × 12 × 33 mm board, scaled up so it reads at scene scale. White ABS
-    /// finish with a thin teal accent on the leading edge for the LED.
-    private static func makeProceduralBoard() -> Entity {
+    /// MetaBase-style rectangular MetaMotion model with front-panel details.
+    private static func makeMetaMotionBoard() -> Entity {
         let parent = Entity()
-        let w: Float = 0.10   // width  (matches 24 mm)
-        let h: Float = 0.05   // depth  (matches 12 mm, scaled for visual presence)
-        let d: Float = 0.138  // length (matches 33 mm)
+        let shell = material(white: 0.92, roughness: 0.48)
+        let highlight = material(white: 0.985, roughness: 0.38)
+        let dot = material(white: 0.70, roughness: 0.58)
+        let edge = material(white: 0.62, roughness: 0.70)
 
-        var body = PhysicallyBasedMaterial()
-        body.baseColor = .init(tint: .init(white: 0.92, alpha: 1.0))
-        body.roughness = 0.45
-        body.metallic = 0.0
-        let bodyMesh = MeshResource.generateBox(width: w, height: h, depth: d, cornerRadius: 0.014)
-        let board = ModelEntity(mesh: bodyMesh, materials: [body])
-        parent.addChild(board)
+        addRoundedBox(
+            to: parent,
+            width: 0.090,
+            height: 0.142,
+            depth: 0.020,
+            cornerRadius: 0.024,
+            position: [0, 0.002, 0],
+            material: shell
+        )
+        addRoundedBox(
+            to: parent,
+            width: 0.070,
+            height: 0.104,
+            depth: 0.004,
+            cornerRadius: 0.018,
+            position: [0, -0.004, 0.012],
+            material: highlight
+        )
+        addDisc(to: parent, radius: 0.012, position: [-0.030, 0.049, 0.016], material: dot)
+        addDisc(to: parent, radius: 0.005, position: [-0.029, -0.050, 0.016], material: dot)
 
-        var accent = PhysicallyBasedMaterial()
-        accent.baseColor = .init(tint: .init(red: 0.22, green: 0.62, blue: 0.78, alpha: 1.0))
-        accent.emissiveColor = .init(color: .init(red: 0.30, green: 0.78, blue: 0.95, alpha: 1.0))
-        accent.emissiveIntensity = 0.6
-        let ledMesh = MeshResource.generateBox(width: w * 0.18, height: h * 0.4, depth: d * 0.04, cornerRadius: 0.002)
-        let led = ModelEntity(mesh: ledMesh, materials: [accent])
-        led.position = [w * 0.32, h * 0.5 + 0.0005, d * 0.45]
-        parent.addChild(led)
+        addRoundedBox(
+            to: parent,
+            width: 0.040,
+            height: 0.008,
+            depth: 0.024,
+            cornerRadius: 0.003,
+            position: [0, -0.073, 0],
+            material: edge
+        )
 
-        var port = PhysicallyBasedMaterial()
-        port.baseColor = .init(tint: .init(white: 0.18, alpha: 1.0))
-        port.roughness = 0.6
-        let portMesh = MeshResource.generateBox(width: w * 0.38, height: h * 0.45, depth: d * 0.03, cornerRadius: 0.003)
-        let port3d = ModelEntity(mesh: portMesh, materials: [port])
-        port3d.position = [0, 0, -d * 0.5]
-        parent.addChild(port3d)
-
-        parent.position = [0, 0, -0.35]
+        parent.scale = [8.8, 8.8, 8.8]
+        parent.position = [0, 0, -0.45]
         return parent
+    }
+
+    private static func addRoundedBox(
+        to parent: Entity,
+        width: Float,
+        height: Float,
+        depth: Float,
+        cornerRadius: Float,
+        position: SIMD3<Float>,
+        material: PhysicallyBasedMaterial
+    ) {
+        let mesh = MeshResource.generateBox(
+            width: width,
+            height: height,
+            depth: depth,
+            cornerRadius: cornerRadius
+        )
+        let entity = ModelEntity(mesh: mesh, materials: [material])
+        entity.position = position
+        parent.addChild(entity)
+    }
+
+    private static func addDisc(
+        to parent: Entity,
+        radius: Float,
+        position: SIMD3<Float>,
+        material: PhysicallyBasedMaterial
+    ) {
+        let mesh = MeshResource.generateCylinder(height: 0.003, radius: radius)
+        let entity = ModelEntity(mesh: mesh, materials: [material])
+        entity.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
+        entity.position = position
+        parent.addChild(entity)
+    }
+
+    private static func material(white: CGFloat, roughness: Float) -> PhysicallyBasedMaterial {
+        var material = PhysicallyBasedMaterial()
+        material.baseColor = .init(tint: .init(white: white, alpha: 1.0))
+        material.roughness = .init(floatLiteral: roughness)
+        material.metallic = 0.0
+        return material
     }
 
     /// Normalise an externally-loaded entity: place its centre at the origin
