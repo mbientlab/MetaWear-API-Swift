@@ -49,32 +49,16 @@ struct ControlsView: View {
                 }
 
                 Section("Quick Reads") {
-                    QuickReadRow(
-                        title: "Temperature",
-                        icon: "thermometer.medium",
-                        value: viewModel.temperatureC.map { Self.formattedMeasurement($0, unit: "°C") },
-                        isLoading: viewModel.isReadingTemperature
-                    ) { Task { await viewModel.readTemperature() } }
-
-                    // Pressure / Ambient Light exist only on boards that carry
-                    // those sensors. MetaMotion R/RL and S have neither, so the
-                    // reads would just time out — gate on the discovered modules.
-                    if viewModel.hasBarometer {
+                    // Driven by the board's discovered modules: each one-shot-
+                    // readable sensor appears only when present (temperature is on
+                    // every board; pressure / ambient-light depend on the model).
+                    ForEach(quickReads.filter { viewModel.availableModules.contains($0.module) }) { spec in
                         QuickReadRow(
-                            title: "Pressure",
-                            icon: "barometer",
-                            value: viewModel.pressurePa.map { Self.formattedMeasurement($0 / 100, unit: "hPa") },
-                            isLoading: viewModel.isReadingPressure
-                        ) { Task { await viewModel.readPressure() } }
-                    }
-
-                    if viewModel.hasAmbientLight {
-                        QuickReadRow(
-                            title: "Ambient Light",
-                            icon: "sun.max",
-                            value: viewModel.ambientLightLux.map { Self.formattedMeasurement($0, unit: "lux") },
-                            isLoading: viewModel.isReadingLight
-                        ) { Task { await viewModel.readAmbientLight() } }
+                            title: spec.title,
+                            icon: spec.icon,
+                            value: spec.value(viewModel),
+                            isLoading: spec.isLoading(viewModel)
+                        ) { Task { await spec.read(viewModel) } }
                     }
                 }
 
@@ -122,6 +106,39 @@ struct ControlsView: View {
     private static func formattedMeasurement(_ value: Float, unit: String) -> String {
         value.formatted(.number.precision(.fractionLength(1))) + " " + unit
     }
+
+    /// One-shot-readable sensors offered in Quick Reads, each gated on its module
+    /// being present on the connected board. Add a spec to offer another one-shot
+    /// read — no other view change needed.
+    private var quickReads: [QuickReadSpec] {
+        [
+            QuickReadSpec(id: "temperature", title: "Temperature", icon: "thermometer.medium", module: .temperature,
+                          value: { vm in vm.temperatureC.map { Self.formattedMeasurement($0, unit: "°C") } },
+                          isLoading: { $0.isReadingTemperature },
+                          read: { vm in await vm.readTemperature() }),
+            QuickReadSpec(id: "pressure", title: "Pressure", icon: "barometer", module: .barometer,
+                          value: { vm in vm.pressurePa.map { Self.formattedMeasurement($0 / 100, unit: "hPa") } },
+                          isLoading: { $0.isReadingPressure },
+                          read: { vm in await vm.readPressure() }),
+            QuickReadSpec(id: "ambientLight", title: "Ambient Light", icon: "sun.max", module: .ambientLight,
+                          value: { vm in vm.ambientLightLux.map { Self.formattedMeasurement($0, unit: "lux") } },
+                          isLoading: { $0.isReadingLight },
+                          read: { vm in await vm.readAmbientLight() }),
+        ]
+    }
+}
+
+/// Describes one Quick Reads row: which board module gates it, plus how to read
+/// the value, format it, and reflect the in-flight state. Keeps the section's
+/// presence-gating uniform instead of hardcoding each sensor.
+private struct QuickReadSpec: Identifiable {
+    let id: String
+    let title: String
+    let icon: String
+    let module: MWModule
+    let value: (ControlsViewModel) -> String?
+    let isLoading: (ControlsViewModel) -> Bool
+    let read: (ControlsViewModel) async -> Void
 }
 
 /// One row in the Quick Reads section. Shows the sensor name + icon, the

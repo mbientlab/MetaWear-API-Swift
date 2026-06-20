@@ -30,14 +30,12 @@ final class ControlsViewModel {
     var isReadingPressure = false
     var isReadingLight = false
 
-    /// Modules the connected board reported present during discovery. The
-    /// Quick Reads section shows only the reads the board actually supports —
-    /// MetaMotion R/RL and S carry no barometer or ambient-light sensor, so
-    /// those reads would just time out and shouldn't be offered at all.
+    /// Modules the connected board reported present during discovery. The Quick
+    /// Reads section is driven by this set: each one-shot-readable sensor
+    /// (temperature, pressure, ambient light) is offered only when its module is
+    /// present, so a board without a given sensor doesn't show a read that would
+    /// just time out.
     var availableModules: Set<MWModule> = []
-
-    var hasBarometer: Bool { availableModules.contains(.barometer) }
-    var hasAmbientLight: Bool { availableModules.contains(.ambientLight) }
 
     var motorDutyPercent: Int {
         get { Int(motorDuty) }
