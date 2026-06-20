@@ -30,6 +30,15 @@ final class ControlsViewModel {
     var isReadingPressure = false
     var isReadingLight = false
 
+    /// Modules the connected board reported present during discovery. The
+    /// Quick Reads section shows only the reads the board actually supports —
+    /// MetaMotion R/RL and S carry no barometer or ambient-light sensor, so
+    /// those reads would just time out and shouldn't be offered at all.
+    var availableModules: Set<MWModule> = []
+
+    var hasBarometer: Bool { availableModules.contains(.barometer) }
+    var hasAmbientLight: Bool { availableModules.contains(.ambientLight) }
+
     var motorDutyPercent: Int {
         get { Int(motorDuty) }
         set { motorDuty = UInt8(clamping: newValue) }
@@ -42,6 +51,14 @@ final class ControlsViewModel {
 
     init(device: MetaWearDevice) {
         self.device = device
+    }
+
+    /// Refresh `availableModules` from the device's discovered module set so
+    /// the UI can hide reads the board doesn't physically support. Mirrors the
+    /// gating in `SensorConfigView` / `LogSessionView`.
+    func loadModules() async {
+        let mods = await device.modules
+        availableModules = Set(mods.compactMap { $0.value.isPresent ? $0.key : nil })
     }
 
     func playLED() async {

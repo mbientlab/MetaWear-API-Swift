@@ -56,19 +56,26 @@ struct ControlsView: View {
                         isLoading: viewModel.isReadingTemperature
                     ) { Task { await viewModel.readTemperature() } }
 
-                    QuickReadRow(
-                        title: "Pressure",
-                        icon: "barometer",
-                        value: viewModel.pressurePa.map { Self.formattedMeasurement($0 / 100, unit: "hPa") },
-                        isLoading: viewModel.isReadingPressure
-                    ) { Task { await viewModel.readPressure() } }
+                    // Pressure / Ambient Light exist only on boards that carry
+                    // those sensors. MetaMotion R/RL and S have neither, so the
+                    // reads would just time out — gate on the discovered modules.
+                    if viewModel.hasBarometer {
+                        QuickReadRow(
+                            title: "Pressure",
+                            icon: "barometer",
+                            value: viewModel.pressurePa.map { Self.formattedMeasurement($0 / 100, unit: "hPa") },
+                            isLoading: viewModel.isReadingPressure
+                        ) { Task { await viewModel.readPressure() } }
+                    }
 
-                    QuickReadRow(
-                        title: "Ambient Light",
-                        icon: "sun.max",
-                        value: viewModel.ambientLightLux.map { Self.formattedMeasurement($0, unit: "lux") },
-                        isLoading: viewModel.isReadingLight
-                    ) { Task { await viewModel.readAmbientLight() } }
+                    if viewModel.hasAmbientLight {
+                        QuickReadRow(
+                            title: "Ambient Light",
+                            icon: "sun.max",
+                            value: viewModel.ambientLightLux.map { Self.formattedMeasurement($0, unit: "lux") },
+                            isLoading: viewModel.isReadingLight
+                        ) { Task { await viewModel.readAmbientLight() } }
+                    }
                 }
 
                 Section("Haptic") {
@@ -100,6 +107,7 @@ struct ControlsView: View {
             if viewModel == nil {
                 viewModel = ControlsViewModel(device: device)
             }
+            await viewModel?.loadModules()
         }
         .alert(item: Binding(
             get: { viewModel?.lastError },
