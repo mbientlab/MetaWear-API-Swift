@@ -38,3 +38,6 @@ AGENTS.md
 .vscode/
 .idea/
 *.swp
+
+# Local-only App Store submission collateral — never pushed
+Apps/MetaWear/AppStore/
