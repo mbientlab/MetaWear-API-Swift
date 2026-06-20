@@ -73,11 +73,20 @@ final class StreamSessionViewModel {
     func stop() async {
         isStreaming = false
         isPaused = false
-        startedAt = nil
         throttleTask?.cancel()
         throttleTask = nil
 
         await tearDownStreams()
+        // Persist the captured buffers as part of Stop — not only in
+        // `onDisappear`. Otherwise tapping Stop and then backgrounding or
+        // killing the app (instead of navigating back) silently loses the
+        // just-captured session, even though archive-to-history is a feature.
+        // `archiveToHistory()` is idempotent (`hasArchived`), so the later
+        // `onDisappear` call becomes a no-op. `startedAt` stays set until after
+        // the archive so the saved sample ticks keep the real session start.
+        await archiveToHistory()
+
+        startedAt = nil
         selections = []
     }
 
@@ -317,8 +326,7 @@ final class StreamSessionViewModel {
                     // every 33 ms. Touching the observed fields
                     // directly here would fire a SwiftUI invalidation
                     // per sample and stall the UI at high sample rates.
-                    channel.ring.append(any)
-                    channel.receivedCount &+= 1
+                    channel.ingest(any)
                 }
             } catch is CancellationError {
                 return
@@ -347,8 +355,7 @@ final class StreamSessionViewModel {
                     guard let self, self.isStreaming, !self.isPaused else { continue }
                     let any = convert(sample)
                     // Non-observed write — throttle loop publishes.
-                    channel.ring.append(any)
-                    channel.receivedCount &+= 1
+                    channel.ingest(any)
                 }
             } catch is CancellationError {
                 return
@@ -377,7 +384,13 @@ final class StreamSessionViewModel {
                     // ms), instead of three per sample on the consume
                     // task. At 100 Hz × 3 sensors that's ~30 ticks/sec
                     // total UI churn rather than ~900 invalidations/sec.
-                    channel.displayBuffer = elements
+                    //
+                    // `displayRing` is already decimated to a screen-
+                    // resolvable point count and only ever appended to, so
+                    // snapshotting it yields a smooth scrolling trace whose
+                    // older points never move. `latest` and the archived
+                    // `ring` stay full-resolution.
+                    channel.displayBuffer = channel.displayRing.elements
                     channel.latest = elements.last
                     channel.effectiveHz = Self.effectiveHz(from: elements)
                     channel.totalSamples = received

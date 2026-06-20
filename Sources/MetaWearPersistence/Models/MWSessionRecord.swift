@@ -9,20 +9,24 @@ import Foundation
 public final class MWSessionRecord {
 
     /// Stable, app-assigned session identifier. Use this for all cross-context lookups.
-    @Attribute(.unique) public var id: UUID
+    ///
+    /// Not declared `@Attribute(.unique)`: CloudKit-backed stores do not support
+    /// unique constraints. Uniqueness is guaranteed by the app always assigning a
+    /// fresh `UUID` per session, and all lookups go through a UUID predicate.
+    public var id: UUID = UUID()
     /// The CoreBluetooth peripheral UUID of the source device.
-    public var deviceID: UUID
+    public var deviceID: UUID = UUID()
     /// Discriminator matching `MWPersistable.persistenceKind`
     /// (e.g. "cartesian", "quaternion", "euler", "float", …).
-    public var sensorKind: String
+    public var sensorKind: String = ""
     /// Wall-clock timestamp of the first sample.
-    public var startDate: Date
+    public var startDate: Date = Date.distantPast
     /// Wall-clock timestamp of the last sample.
-    public var endDate: Date
+    public var endDate: Date = Date.distantPast
     /// Denormalised device info — stored once per session for offline display.
-    public var deviceSerial: String
-    public var deviceModel: String
-    public var deviceFirmware: String
+    public var deviceSerial: String = ""
+    public var deviceModel: String = ""
+    public var deviceFirmware: String = ""
     /// User-facing description of the sensor + settings the session
     /// captured (e.g. "Gyroscope · ±2000 dps · 25 Hz"). Optional because
     /// `sensorKind` alone is enough to load the samples; this is a display
@@ -30,8 +34,11 @@ public final class MWSessionRecord {
     /// field was added.
     public var label: String?
 
+    /// Optional because CloudKit integration requires every relationship —
+    /// including to-many — to be optional. Treat `nil` as "no samples"; the
+    /// store and snapshot accessors coalesce it to an empty array.
     @Relationship(deleteRule: .cascade, inverse: \MWSampleRecord.session)
-    public var samples: [MWSampleRecord]
+    public var samples: [MWSampleRecord]? = []
 
     public init(
         id: UUID = UUID(),

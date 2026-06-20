@@ -1,10 +1,12 @@
 import SwiftUI
 import SwiftData
 import MetaWear
+import MetaWearFirmware
 
 struct DeviceSettingsView: View {
     @Environment(AppStore.self) private var appStore
     @State private var viewModel: DeviceViewModel?
+    @State private var firmware: FirmwareUpdateViewModel?
     @State private var draftName: String = ""
     @State private var showFactoryResetConfirm = false
     @State private var showClearLogsConfirm = false
@@ -26,6 +28,10 @@ struct DeviceSettingsView: View {
                     Task { await viewModel?.rename(to: draftName) }
                 }
                 .disabled(draftName.isEmpty)
+            }
+
+            if let firmware {
+                FirmwareSection(viewModel: firmware)
             }
 
             Section {
@@ -65,6 +71,15 @@ struct DeviceSettingsView: View {
             if viewModel == nil {
                 viewModel = DeviceViewModel(device: device, appStore: appStore)
                 await viewModel?.refreshAfterConnect()
+            }
+            // Firmware update is a real-hardware operation — it queries
+            // MbientLab's catalog and flashes over DFU — so the section is
+            // hidden for the simulated Demo Mode board: there's nothing to
+            // flash, and the catalog lookup would just error on its synthetic
+            // firmware revision.
+            if firmware == nil, device.identifier != DemoBLETransport.deviceIdentifier {
+                firmware = FirmwareUpdateViewModel(device: device, appStore: appStore)
+                await firmware?.loadCurrentVersion()
             }
             await refreshLogStats()
         }
@@ -133,6 +148,153 @@ struct DeviceSettingsView: View {
         if let records = try? context.fetch(descriptor) {
             for record in records { context.delete(record) }
             try? context.save()
+        }
+    }
+}
+
+// MARK: - Firmware
+
+/// Settings section that surfaces the board's firmware version, checks
+/// MbientLab's catalog for a newer build, and runs an over-the-air DFU update
+/// with a live progress readout. All state lives in `FirmwareUpdateViewModel`;
+/// this view just maps `phase` onto rows.
+private struct FirmwareSection: View {
+    let viewModel: FirmwareUpdateViewModel
+    @State private var showUpdateConfirm = false
+
+    var body: some View {
+        Section {
+            LabeledContent("Installed") {
+                Text(viewModel.currentVersion ?? "—")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            content
+        } header: {
+            Text("Firmware")
+        } footer: {
+            footer
+        }
+        .confirmationDialog("Update firmware?",
+                            isPresented: $showUpdateConfirm,
+                            titleVisibility: .visible) {
+            Button("Update") {
+                Task { await viewModel.startUpdate() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Keep MetaWear open with the board nearby and powered until the update finishes. The board restarts automatically when it's done.")
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch viewModel.phase {
+        case .unknown:
+            Button("Check for Updates", systemImage: "arrow.triangle.2.circlepath") {
+                Task { await viewModel.checkForUpdate() }
+            }
+
+        case .checking:
+            HStack {
+                Text("Checking for updates…")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                ProgressView().controlSize(.small)
+            }
+
+        case .upToDate:
+            LabeledContent("Status") {
+                Label("Up to date", systemImage: "checkmark.circle.fill")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.green)
+            }
+            Button("Check Again", systemImage: "arrow.triangle.2.circlepath") {
+                Task { await viewModel.checkForUpdate() }
+            }
+
+        case .updateAvailable(let build):
+            LabeledContent("Latest") {
+                Text(build.firmwareRev)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            Button("Update Firmware", systemImage: "square.and.arrow.down") {
+                showUpdateConfirm = true
+            }
+
+        case .updating(let progress):
+            FirmwareProgressView(progress: progress)
+
+        case .completed:
+            LabeledContent("Status") {
+                Label("Updated", systemImage: "checkmark.circle.fill")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.green)
+            }
+
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Button("Try Again", systemImage: "arrow.triangle.2.circlepath") {
+                Task { await viewModel.checkForUpdate() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        switch viewModel.phase {
+        case .updating:
+            Text("Updating firmware. Keep the app open with the board nearby and powered — do not disconnect.")
+        case .updateAvailable:
+            Text("Downloads the latest firmware from MbientLab and installs it over Bluetooth. The board restarts when finished.")
+        default:
+            EmptyView()
+        }
+    }
+}
+
+/// One row showing the active DFU phase plus a determinate progress bar while
+/// firmware bytes are actually transferring (`percentComplete` is only
+/// meaningful during `.uploading`; every other phase shows a small spinner).
+private struct FirmwareProgressView: View {
+    let progress: DFUProgress
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(label)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if progress.state == .uploading {
+                    Text("\(Int(progress.percentComplete))%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            if progress.state == .uploading {
+                ProgressView(value: progress.percentComplete, total: 100)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var label: String {
+        switch progress.state {
+        case .fetchingCatalog:     return "Checking catalog…"
+        case .downloadingFirmware: return "Downloading firmware…"
+        case .bootloaderHandoff:   return "Preparing device…"
+        case .scanning:            return "Locating device…"
+        case .connecting:          return "Connecting…"
+        case .starting:            return "Starting transfer…"
+        case .validating:          return "Validating…"
+        case .uploading:           return "Installing…"
+        case .disconnecting:       return "Finishing up…"
+        case .completed:           return "Complete"
+        case .aborted:             return "Aborted"
         }
     }
 }

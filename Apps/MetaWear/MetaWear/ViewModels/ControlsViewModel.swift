@@ -30,6 +30,13 @@ final class ControlsViewModel {
     var isReadingPressure = false
     var isReadingLight = false
 
+    /// Modules the connected board reported present during discovery. The Quick
+    /// Reads section is driven by this set: each one-shot-readable sensor
+    /// (temperature, pressure, ambient light) is offered only when its module is
+    /// present, so a board without a given sensor doesn't show a read that would
+    /// just time out.
+    var availableModules: Set<MWModule> = []
+
     var motorDutyPercent: Int {
         get { Int(motorDuty) }
         set { motorDuty = UInt8(clamping: newValue) }
@@ -42,6 +49,14 @@ final class ControlsViewModel {
 
     init(device: MetaWearDevice) {
         self.device = device
+    }
+
+    /// Refresh `availableModules` from the device's discovered module set so
+    /// the UI can hide reads the board doesn't physically support. Mirrors the
+    /// gating in `SensorConfigView` / `LogSessionView`.
+    func loadModules() async {
+        let mods = await device.modules
+        availableModules = Set(mods.compactMap { $0.value.isPresent ? $0.key : nil })
     }
 
     func playLED() async {
@@ -125,16 +140,26 @@ final class ControlsViewModel {
                                     measurementRate: .ms100)
         do {
             let stream = try await device.startStream(sensor)
-            var lastRaw: UInt32 = 0
-            var seen = 0
-            for try await sample in stream {
-                lastRaw = sample.value
-                seen += 1
-                if sample.value > 0 || seen >= 10 { break }
+            // Once the stream has started it MUST be torn down on every exit,
+            // including the throwing one (mid-read disconnect / malformed
+            // packet). `defer` can't await, so use an inner do/catch and tear
+            // down unconditionally after it — otherwise the LTR329 stays
+            // enabled and its active-stream entry blocks every later read.
+            do {
+                var lastRaw: UInt32 = 0
+                var seen = 0
+                for try await sample in stream {
+                    lastRaw = sample.value
+                    seen += 1
+                    if sample.value > 0 || seen >= 10 { break }
+                }
+                ambientLightLux = Float(lastRaw) / 1000
+            } catch {
+                lastError = AppError(error: error)
             }
-            ambientLightLux = Float(lastRaw) / 1000
             try? await device.stopStreaming(sensor)
         } catch {
+            // `startStream` itself failed — nothing was enabled to tear down.
             lastError = AppError(error: error)
         }
     }

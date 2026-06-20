@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Privacy manifest for the MetaWear app.
+
+	  NSPrivacyTracking: the app does not track users (no cross-app/website
+	  linking of data for advertising or sharing with data brokers).
+
+	  NSPrivacyCollectedDataTypes: empty. Sensor data and sessions are stored
+	  only in the app's local SwiftData store. Remembered-device metadata is
+	  stored in a separate CloudKit-backed SwiftData store so it can sync through
+	  the user's private iCloud account, which is keyed to their Apple ID and is
+	  not accessible to MbientLab. CSV exports are user-initiated (share sheet /
+	  Files) and stay under the user's control. No data is transmitted to
+	  MbientLab servers or any third party.
+
+	  NSPrivacyAccessedAPITypes: empty. A code audit of the app target and the
+	  first-party MetaWear SDK targets found no required-reason API usage
+	  (no UserDefaults, file-timestamp, disk-space, active-keyboard, or
+	  system-boot-time access). The bundled third-party SDKs (NordicDFU and
+	  ZIPFoundation, linked via MetaWearFirmware) ship their own privacy
+	  manifests, which Xcode aggregates into the archive's privacy report.
+
+	  NOTE: if a future build adds @AppStorage/UserDefaults, add an entry for
+	  NSPrivacyAccessedAPICategoryUserDefaults with reason "CA92.1".
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>

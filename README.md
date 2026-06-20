@@ -7,12 +7,13 @@ This repository contains both the reusable Swift Package products and the MetaWe
 - Use `MetaWear` when you need the scanner, device actor, BLE transport, protocol layer, and sensor/module APIs.
 - Add `MetaWearPersistence` when you want SwiftData-backed session storage and CSV export helpers.
 - Add `MetaWearFirmware` only when your app needs over-the-air DFU firmware updates.
-- Open `Apps/MetaWear/MetaWearApp.xcodeproj` for the full MetaWear app.
+- Open `Apps/MetaWear/MetaWearApp.xcodeproj` for the full MetaWear app — see [The MetaWear App](#the-metawear-app).
 
 ## Table of Contents
 
 | Start here | Use it for |
 |------------|------------|
+| [The MetaWear App](#the-metawear-app) | The full SwiftUI app — what it does, running it (incl. Demo Mode), and how it's built |
 | [Quick Start](#quick-start) | Adding the package, scanning, connecting, streaming, and sending simple commands |
 | [Architecture](#architecture) | Understanding the scanner/device/protocol/transport layering |
 | [Supported sensors and modules](#supported-sensors-and-modules) | Finding the Swift type and configuration shape for each MetaWear module |
@@ -67,6 +68,51 @@ The validator is forgiving about formatting — `"r0.4"`, `"R0.4"`, and `"0.4"` 
 
 The four SwiftPM products are intentionally split so an app can take just `MetaWear` without pulling NordicDFU or SwiftData.
 Hardware integration tests (`MetaWearHardwareTests`) live in `Tests/IntegrationTests/MetaWearTestHost.xcodeproj` — see [Hardware integration tests](#hardware-integration-tests).
+
+---
+
+## The MetaWear App
+
+`Apps/MetaWear/MetaWearApp.xcodeproj` is the MetaWear app — a SwiftUI app built on
+the three SwiftPM products above (`MetaWear` for BLE + protocol, `MetaWearPersistence`
+for storage and CSV, `MetaWearFirmware` for DFU). It doubles as the reference
+consumer of the SDK: the public APIs an app needs are exercised here end to end.
+
+### What you can do
+
+| Area | What it does |
+|------|--------------|
+| **Scan & connect** | Discover nearby MetaMotion boards with live RSSI, connect, and reconnect to remembered devices |
+| **Sensor config** | Choose sensors and per-sensor rate / range (e.g. accelerometer ±2 g @ 100 Hz) before streaming or logging |
+| **Live Stream** | Real-time x/y/z charts with live numeric readouts and an effective-Hz indicator, a 3D orientation view driven by sensor-fusion quaternions, pause/resume, and archiving the live buffer to Session History |
+| **Logging & download** | Start on-device flash logging — the board keeps recording while disconnected — then reconnect and download; interrupted sessions are recoverable |
+| **Session history** | Browse saved sessions, re-plot them, and export any session to CSV (Files / AirDrop / email) |
+| **Controls** | Single-shot reads (temperature, pressure, ambient light), plus LED, haptic, and other module actions |
+| **Device info & settings** | Battery, signal strength, serial / firmware / model, and per-device settings |
+
+### Running it
+
+1. Open `Apps/MetaWear/MetaWearApp.xcodeproj` in Xcode 16+. The app targets **iOS 26** (it uses the Liquid Glass design system); the scheme is **MetaWearApp**.
+2. **With hardware** — run on a physical iPhone or iPad and connect a MetaMotion board over Bluetooth.
+3. **Without hardware** — run in the iOS Simulator, where **Demo Mode** turns on automatically and injects a fully simulated "Simulated MetaWear" board so every screen works (synthetic live streams, a recordable/downloadable log session, battery / RSSI, …). On a real device, pass the `-MWDemo` launch argument to force Demo Mode. See `App/DemoMode.swift`.
+
+### How it's built
+
+- **SwiftUI + `@Observable`**, with `NavigationSplitView` for an iPhone/iPad-adaptive layout and an iOS 26 "Liquid Glass" design system (`Designs/`).
+- **`AppStore`** (`App/AppStore.swift`) is the root app state; each screen is driven by a focused `@MainActor` view model in `ViewModels/`.
+- **High-rate streaming pipeline** — the BLE consume task appends samples to a non-observed ring buffer; a 33 ms throttle publishes to the UI, and the plotted series is decimated once at ingest, so charts stay smooth and stable at sensor rates up to 200 Hz (`ViewModels/StreamSessionViewModel.swift`, `ViewModels/Channel.swift`).
+- **Split persistence** (`Persistence/AppModelContainer.swift`) — sessions, samples, and active log records live in a **local-only** SwiftData store, so high-volume telemetry never enters iCloud; the small remembered-devices list uses a separate **CloudKit-backed** store so boards are recognized across your Apple devices.
+
+### Where the code lives
+
+| Path | Contents |
+|------|----------|
+| `App/` | Entry point, root view, app state (`AppStore`), Demo Mode, shared sample / ring-buffer types |
+| `Features/` | One folder per screen: `Scan`, `SensorConfig`, `LiveStream`, `Logging`, `Sessions`, `Controls`, `DeviceInfo`, `Settings`, `DeviceDetail` |
+| `ViewModels/` | `@MainActor` view models, roughly one per feature |
+| `Designs/` | Liquid Glass components, theme / palette, reusable chips and badges |
+| `Persistence/` | SwiftData containers and the app-side `@Model` types |
+| `Export/` | CSV exporters for logged and live-buffer sessions |
 
 ---
 

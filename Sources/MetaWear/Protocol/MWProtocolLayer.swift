@@ -342,7 +342,7 @@ actor MWProtocolLayer {
         let isRead       = (registerByte & 0x80) != 0
         let normalized   = registerByte & 0x3F
         let key          = ModuleRegisterKey(module: moduleId, register: normalized)
-        mwLog("[Proto] read and route: module=\(String(format: "%02X", moduleId)) register=\(String(format: "%02X", registerByte)) data=\(packet.dropFirst(2).map { String(format: "%02X", $0) })) isRead=\(isRead) [\(packet.map { String(format: "%02X", $0) }.joined(separator: " "))]")
+        mwLogVerbose("[Proto] read and route: module=\(String(format: "%02X", moduleId)) register=\(String(format: "%02X", registerByte)) data=\(packet.dropFirst(2).map { String(format: "%02X", $0) })) isRead=\(isRead) [\(packet.map { String(format: "%02X", $0) }.joined(separator: " "))]")
 
         if isRead {
             if var waiters = readWaiters[key], !waiters.isEmpty {
