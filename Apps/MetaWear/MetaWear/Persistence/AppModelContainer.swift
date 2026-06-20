@@ -24,11 +24,13 @@ enum AppModelContainer {
             return try ModelContainer(for: schema, configurations: configuration)
         } catch where !inMemory {
             // iCloud backup is deliberately best-effort. If the CloudKit-backed
-            // store cannot initialize (for example: account/capability problems
-            // during development), keep the app usable with a local remembered
-            // device store instead of blocking launch.
+            // store can't initialize (account/capability problems), reopen the
+            // SAME on-disk store locally with CloudKit off. Reusing the same
+            // configuration name ("RememberedDevices") matters: a different name
+            // points at a separate SQLite file, orphaning any already-synced
+            // remembered devices in a divergent store.
             let fallback = ModelConfiguration(
-                "RememberedDevicesLocalFallback",
+                "RememberedDevices",
                 schema: schema,
                 isStoredInMemoryOnly: false,
                 cloudKitDatabase: .none

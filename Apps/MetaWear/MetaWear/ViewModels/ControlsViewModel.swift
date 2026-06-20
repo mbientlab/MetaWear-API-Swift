@@ -125,16 +125,26 @@ final class ControlsViewModel {
                                     measurementRate: .ms100)
         do {
             let stream = try await device.startStream(sensor)
-            var lastRaw: UInt32 = 0
-            var seen = 0
-            for try await sample in stream {
-                lastRaw = sample.value
-                seen += 1
-                if sample.value > 0 || seen >= 10 { break }
+            // Once the stream has started it MUST be torn down on every exit,
+            // including the throwing one (mid-read disconnect / malformed
+            // packet). `defer` can't await, so use an inner do/catch and tear
+            // down unconditionally after it — otherwise the LTR329 stays
+            // enabled and its active-stream entry blocks every later read.
+            do {
+                var lastRaw: UInt32 = 0
+                var seen = 0
+                for try await sample in stream {
+                    lastRaw = sample.value
+                    seen += 1
+                    if sample.value > 0 || seen >= 10 { break }
+                }
+                ambientLightLux = Float(lastRaw) / 1000
+            } catch {
+                lastError = AppError(error: error)
             }
-            ambientLightLux = Float(lastRaw) / 1000
             try? await device.stopStreaming(sensor)
         } catch {
+            // `startStream` itself failed — nothing was enabled to tear down.
             lastError = AppError(error: error)
         }
     }

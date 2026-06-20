@@ -73,11 +73,20 @@ final class StreamSessionViewModel {
     func stop() async {
         isStreaming = false
         isPaused = false
-        startedAt = nil
         throttleTask?.cancel()
         throttleTask = nil
 
         await tearDownStreams()
+        // Persist the captured buffers as part of Stop — not only in
+        // `onDisappear`. Otherwise tapping Stop and then backgrounding or
+        // killing the app (instead of navigating back) silently loses the
+        // just-captured session, even though archive-to-history is a feature.
+        // `archiveToHistory()` is idempotent (`hasArchived`), so the later
+        // `onDisappear` call becomes a no-op. `startedAt` stays set until after
+        // the archive so the saved sample ticks keep the real session start.
+        await archiveToHistory()
+
+        startedAt = nil
         selections = []
     }
 
