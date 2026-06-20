@@ -4,35 +4,56 @@ import MetaWearPersistence
 
 enum AppModelContainer {
     static func makeShared(inMemory: Bool = false) throws -> AppContainers {
-        // v1 ships **local-only** (no CloudKit). CloudKit was tried but
-        // `NSPersistentCloudKitContainer` on the app's main `ModelContext`
-        // thrashed the main actor at runtime (continuous WAL checkpoints +
-        // failed `com.apple.coredata.cloudkit.activity.export` background-task
-        // scheduling), which stalled the interactive @MainActor flows — single
-        // reads, the Live-Stream "Add sensor" menu, and logging start. Raw BLE
-        // streaming (which doesn't touch SwiftData) was unaffected, which is the
-        // tell. CloudKit sync is not required for v1.
-        //
-        // The models remain CloudKit-compatible (optional relationships, no
-        // `@Attribute(.unique)`, defaults on every stored property), so
-        // re-enabling later is a one-line flip back to `.automatic` — but only
-        // after the proper setup: register `BGTaskSchedulerPermittedIdentifiers`
-        // for `com.apple.coredata.cloudkit.activity`, route writes through a
-        // dedicated background context, and deploy the schema to Production.
+        try AppContainers(
+            cloud: makeRememberedDeviceContainer(inMemory: inMemory),
+            local: makeLocalSessionContainer(inMemory: inMemory)
+        )
+    }
+
+    private static func makeRememberedDeviceContainer(inMemory: Bool) throws -> ModelContainer {
+        let schema = Schema([RememberedDevice.self])
+        let cloudKitDatabase: ModelConfiguration.CloudKitDatabase = inMemory ? .none : .automatic
+        let configuration = ModelConfiguration(
+            "RememberedDevices",
+            schema: schema,
+            isStoredInMemoryOnly: inMemory,
+            cloudKitDatabase: cloudKitDatabase
+        )
+
+        do {
+            return try ModelContainer(for: schema, configurations: configuration)
+        } catch where !inMemory {
+            // iCloud backup is deliberately best-effort. If the CloudKit-backed
+            // store cannot initialize (for example: account/capability problems
+            // during development), keep the app usable with a local remembered
+            // device store instead of blocking launch.
+            let fallback = ModelConfiguration(
+                "RememberedDevicesLocalFallback",
+                schema: schema,
+                isStoredInMemoryOnly: false,
+                cloudKitDatabase: .none
+            )
+            return try ModelContainer(for: schema, configurations: fallback)
+        }
+    }
+
+    private static func makeLocalSessionContainer(inMemory: Bool) throws -> ModelContainer {
+        // Keep high-volume telemetry out of CloudKit. Local SwiftData owns all
+        // sessions, samples, and active logging records so live streaming and
+        // downloads stay fast regardless of iCloud availability.
         let schema = Schema([
-            RememberedDevice.self,
             MWSessionRecord.self,
             MWSampleRecord.self,
             LogSessionRecord.self
         ])
-        let container = try ModelContainer(
-            for: schema,
-            configurations: ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: inMemory,
-                cloudKitDatabase: .none
-            )
+        let configuration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: inMemory,
+            cloudKitDatabase: .none
         )
-        return AppContainers(cloud: container, local: container)
+        return try ModelContainer(
+            for: schema,
+            configurations: configuration
+        )
     }
 }
