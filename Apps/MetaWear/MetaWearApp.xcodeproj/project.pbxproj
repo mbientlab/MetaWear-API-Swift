@@ -429,7 +429,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 10.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWear;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearApp;
 				PRODUCT_MODULE_NAME = MetaWearApp;
 				PRODUCT_NAME = MetaWearApp;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -466,7 +466,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 10.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWear;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearApp;
 				PRODUCT_MODULE_NAME = MetaWearApp;
 				PRODUCT_NAME = MetaWearApp;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
