@@ -147,6 +147,72 @@ public actor MetaWearDevice {
         mwLog("[Device] disconnect: done")
     }
 
+    /// Send a command that reboots the board (e.g. `MWDebug.JumpToBootloader`)
+    /// and wait for the **device-initiated** disconnect that follows, without
+    /// surfacing it through `onUnexpectedDisconnect`.
+    ///
+    /// Reboot commands are ACKed at the ATT layer and then acted on by the
+    /// firmware, which tears the BLE link down itself as it resets. Cancelling
+    /// the connection from the central side races that reboot — the positive
+    /// signal that the command took effect is the board dropping the link.
+    /// (The DFU handoff learned this the hard way: disconnecting immediately
+    /// after `[0xFE, 0x02]` let Nordic reconnect to a board still running
+    /// app-mode firmware, where service discovery finds no DFU service.)
+    ///
+    /// If the drop doesn't arrive within `timeout`, the connection is torn
+    /// down locally as a fallback so the actor still converges on
+    /// `.disconnected`.
+    public func sendExpectingDisconnect(
+        _ command: any MWCommand,
+        timeout: Duration = .seconds(5)
+    ) async throws {
+        mwLog("[Device] sendExpectingDisconnect: \(identifier)")
+        // Swap the unexpected-disconnect hook for a one-shot signal BEFORE
+        // sending, so a fast reboot can't race the handler installation.
+        let (dropSignal, dropContinuation) = AsyncStream<Void>.makeStream()
+        await proto.setDisconnectHandler { _ in
+            dropContinuation.yield(())
+            dropContinuation.finish()
+        }
+        do {
+            try await send(command)
+        } catch {
+            // The command never went out — restore normal disconnect handling
+            // so a later real drop still reaches onUnexpectedDisconnect.
+            await hookDisconnectCallback()
+            throw error
+        }
+        let dropped = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                var signalled = false
+                for await _ in dropSignal { signalled = true; break }
+                return signalled
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            dropContinuation.finish()
+            return first
+        }
+        if dropped {
+            // Link already gone; converge local state the way disconnect() does.
+            mwLog("[Device] sendExpectingDisconnect: device dropped the link")
+            await proto.clearDisconnectHandler()
+            await proto.stop()
+        } else {
+            mwLog("[Device] sendExpectingDisconnect: no drop within timeout, disconnecting locally")
+            try? await disconnect()
+        }
+        state = .disconnected
+        activeStreamKeys.removeAll()
+        activeFusionConfig = nil
+        logReferenceDate = nil
+        mwLog("[Device] sendExpectingDisconnect: done")
+    }
+
     // MARK: - Factory reset
 
     /// Scrub all on-device runtime state and reboot the board.

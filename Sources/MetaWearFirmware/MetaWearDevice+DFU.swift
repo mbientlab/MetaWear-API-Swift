@@ -142,9 +142,20 @@ extension MetaWearDevice {
         fetcher: MWFirmwareFetcher,
         continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation
     ) async throws {
-        // 1. Idle check. Mid-stream / mid-log / mid-download is unsafe; the
-        //    user should stop those first.
-        guard case .idle = self.state else {
+        // 1. State check. Mid-stream / mid-log / mid-download is unsafe (the
+        //    user should stop those first) — but "not connected" is a
+        //    different situation deserving a different error: BLE links drop
+        //    silently (supervision timeouts), and telling the user to "stop
+        //    streaming" when the board simply disconnected sends them
+        //    debugging the wrong thing.
+        switch self.state {
+        case .idle:
+            break
+        case .disconnected, .connecting:
+            throw MWFirmwareError.operationFailed(
+                "The board is not connected. Reconnect and try again."
+            )
+        default:
             throw MWFirmwareError.deviceNotIdle
         }
 
@@ -167,19 +178,50 @@ extension MetaWearDevice {
         //    bootloader-mode peripheral once BLE drops.
         let targetIdentifier = self.identifier
 
-        // 5. Bootloader handoff: jump-to-bootloader + clean local
-        //    disconnect. The board reboots into MetaBoot mode and re-
-        //    advertises with the Nordic DFU service.
+        // 5. Bootloader handoff: send jump-to-bootloader and wait for the
+        //    BOARD to drop the link as it reboots into MetaBoot. Cancelling
+        //    the connection from our side raced the reboot: Nordic would
+        //    reconnect to a board still running app-mode firmware and fail
+        //    service discovery with "DFU Service not found" (302).
         continuation.yield(DFUProgress(state: .bootloaderHandoff))
-        try await self.send(MWDebug.JumpToBootloader())
-        // The board's reboot drops the BLE link asynchronously; tear down
-        // our actor's view of the connection so subsequent code doesn't
-        // interact with a half-dead transport.
-        try? await self.disconnect()
+        try await self.sendExpectingDisconnect(MWDebug.JumpToBootloader())
+
+        //    Give MetaBoot time to finish booting and start advertising
+        //    before Nordic's connect request goes out.
+        try? await Task.sleep(for: .milliseconds(1500))
 
         // 6. Hand off to Nordic. DFUSession runs on its own dispatch queue
-        //    and yields events into our continuation.
+        //    and yields events into our continuation. If Nordic still loses
+        //    the race (connects into the pre-reboot window / stale GATT),
+        //    retry once — MetaBoot sits waiting after boot, so a delayed
+        //    second pass is safe.
         continuation.yield(DFUProgress(state: .scanning))
+        do {
+            try await Self._runDFUPass(
+                firmware: firmware,
+                targetIdentifier: targetIdentifier,
+                continuation: continuation
+            )
+        } catch MWFirmwareError.dfuFailed(let message)
+            where message.contains("DFU Service not found") {
+            mwFirmwareLog("[DFU] service not found — retrying once after settle delay")
+            try? await Task.sleep(for: .seconds(2))
+            continuation.yield(DFUProgress(state: .scanning))
+            try await Self._runDFUPass(
+                firmware: firmware,
+                targetIdentifier: targetIdentifier,
+                continuation: continuation
+            )
+        }
+    }
+
+    /// One Nordic DFU attempt. `DFUSession` is single-use, so each pass gets
+    /// a fresh session and queue.
+    fileprivate static func _runDFUPass(
+        firmware: DFUFirmware,
+        targetIdentifier: UUID,
+        continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation
+    ) async throws {
         let session = DFUSession()
         let queue = DispatchQueue(
             label: "com.metawear.firmware.dfu.\(targetIdentifier.uuidString)",
@@ -244,7 +286,13 @@ extension MetaWearDevice {
             try? FileManager.default.removeItem(at: tempURL)
             throw MWFirmwareError.badServerResponse(status: response.statusCode)
         }
-        return tempURL
+        // Re-stage under the source's filename: `_makeDFUFirmware` dispatches
+        // on the extension, and the session's temp file ends in ".tmp", which
+        // would be rejected as an invalid firmware container.
+        return try MWFirmwareServer.stageDownload(
+            tempURL: tempURL,
+            filename: url.lastPathComponent
+        )
     }
 
     fileprivate static func _makeDFUFirmware(from url: URL) throws -> DFUFirmware {

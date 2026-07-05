@@ -212,6 +212,81 @@ struct MWFirmwareServerTests {
         }
     }
 
+    // MARK: - Firmware download / staging
+
+    // These exercise the REAL FileManager staging path — the one place in the
+    // server that touches the filesystem. A regression here shipped once:
+    // staging via `.itemReplacementDirectory` with `appropriateFor:` pointed
+    // at the REMOTE firmware URL, which threw `The file "firmware.zip"
+    // doesn't exist` after every successful download on device.
+
+    @Test
+    func downloadFirmware_stagesUnderBuildFilename() async throws {
+        let payload = Data("MOCK-FIRMWARE-BYTES".utf8)
+        let server = MWFirmwareServer(
+            fetcher: MockFirmwareFetcher(catalog: Fixtures.catalogJSON, firmware: payload),
+            catalogURL: Fixtures.catalogURL,
+            sdkVersion: "5.0.0"
+        )
+        let build = MWFirmwareBuild(
+            hardwareRev: "0.1",
+            modelNumber: "8",
+            buildFlavor: "vanilla",
+            firmwareRev: "1.7.2",
+            filename: "firmware.zip",
+            requiredBootloader: "0.4.0"
+        )
+        let staged = try await server.downloadFirmware(build)
+        defer { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+
+        // The staged artifact must exist, carry the catalog filename (the
+        // DFU library dispatches on the ".zip" extension — the mock's source
+        // file ends in ".bin"), and hold the downloaded bytes.
+        #expect(FileManager.default.fileExists(atPath: staged.path))
+        #expect(staged.lastPathComponent == "firmware.zip")
+        #expect(try Data(contentsOf: staged) == payload)
+    }
+
+    @Test
+    func downloadFirmware_returnsFileURLsUnchanged() async throws {
+        let server = MWFirmwareServer(
+            fetcher: MockFirmwareFetcher(catalog: Fixtures.catalogJSON),
+            catalogURL: Fixtures.catalogURL,
+            sdkVersion: "5.0.0"
+        )
+        let local = FileManager.default.temporaryDirectory
+            .appendingPathComponent("already-local-firmware.zip")
+        let build = MWFirmwareBuild(
+            hardwareRev: "0.1",
+            modelNumber: "8",
+            firmwareRev: "1.7.2",
+            customURL: local
+        )
+        // file:// builds skip the network and staging entirely.
+        let result = try await server.downloadFirmware(build)
+        #expect(result == local)
+    }
+
+    @Test
+    func downloadFirmware_throwsBadServerResponseOn404() async throws {
+        let server = MWFirmwareServer(
+            fetcher: MockFirmwareFetcher(catalog: Fixtures.catalogJSON, statusCode: 404),
+            catalogURL: Fixtures.catalogURL,
+            sdkVersion: "5.0.0"
+        )
+        let build = MWFirmwareBuild(
+            hardwareRev: "0.1",
+            modelNumber: "8",
+            buildFlavor: "vanilla",
+            firmwareRev: "1.7.2",
+            filename: "firmware.zip",
+            requiredBootloader: nil
+        )
+        await #expect(throws: MWFirmwareError.badServerResponse(status: 404)) {
+            _ = try await server.downloadFirmware(build)
+        }
+    }
+
     // MARK: - Catalog URL is honoured
 
     @Test
