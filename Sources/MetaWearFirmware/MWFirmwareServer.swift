@@ -196,17 +196,29 @@ public struct MWFirmwareServer: Sendable {
             try? FileManager.default.removeItem(at: tempURL)
             throw MWFirmwareError.badServerResponse(status: response.statusCode)
         }
-        // The session deletes its temp file when the closure exits, so we
-        // copy to a stable location keyed by filename.
+        return try Self.stageDownload(tempURL: tempURL, filename: build.filename)
+    }
+
+    /// Move a URLSession temp download into a private staging directory,
+    /// giving it a stable, correctly-extensioned filename. Two reasons this
+    /// exists:
+    ///   • `DFUFirmware` dispatches on the file extension, and URLSession temp
+    ///     files end in ".tmp" — the artifact must be renamed before hand-off.
+    ///   • The staging path must be built WITHOUT consulting the remote URL:
+    ///     `FileManager.url(for: .itemReplacementDirectory, appropriateFor:)`
+    ///     requires a local file URL, and passing the remote firmware URL made
+    ///     it throw `The file "firmware.zip" doesn't exist` after a perfectly
+    ///     good download.
+    static func stageDownload(tempURL: URL, filename: String) throws -> URL {
         do {
-            let tempDir = try FileManager.default.url(
-                for: .itemReplacementDirectory,
-                in: .userDomainMask,
-                appropriateFor: build.firmwareURL,
-                create: true
+            let stagingDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("com.mbientlab.metawear.firmware", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: stagingDir,
+                withIntermediateDirectories: true
             )
-            let dest = tempDir.appendingPathComponent(build.filename)
-            try? FileManager.default.removeItem(at: dest)
+            let dest = stagingDir.appendingPathComponent(filename)
             try FileManager.default.moveItem(at: tempURL, to: dest)
             return dest
         } catch {

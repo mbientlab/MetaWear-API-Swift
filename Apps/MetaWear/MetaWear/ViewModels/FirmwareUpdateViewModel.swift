@@ -82,8 +82,24 @@ final class FirmwareUpdateViewModel {
     /// that up front so the user gets a clear message instead of a failure
     /// mid-handoff — by which point the board has already been told to jump to
     /// the bootloader.
+    ///
+    /// A dropped BLE link is handled specially: supervision timeouts silently
+    /// disconnect idle boards (e.g. while the user reads the confirmation
+    /// dialog), so `.disconnected` gets one automatic reconnect attempt before
+    /// giving up — and its failure message says "reconnect", not the
+    /// misleading busy-device text.
     func startUpdate() async {
-        guard case .idle = await device.state else {
+        if case .disconnected = await device.state {
+            phase = .checking
+            await appStore.connect(to: device)
+        }
+        switch await device.state {
+        case .idle:
+            break
+        case .disconnected, .connecting:
+            phase = .failed("The board is disconnected. Reconnect and try again.")
+            return
+        default:
             phase = .failed(MWFirmwareError.deviceNotIdle.errorDescription
                             ?? "The board must be idle to update firmware.")
             return
