@@ -267,6 +267,13 @@ private struct FirmwareProgressView: View {
                 Text(label)
                     .foregroundStyle(.secondary)
                 Spacer()
+                // Multi-stage updates (a bootloader upgrade staged before
+                // the application image) surface as steps here.
+                if progress.totalParts > 1 {
+                    Text("Step \(progress.currentPart) of \(progress.totalParts)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 if progress.state == .uploading {
                     Text("\(Int(progress.percentComplete))%")
                         .monospacedDigit()
