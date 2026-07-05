@@ -1,8 +1,18 @@
 import Foundation
 import SwiftData
 import MetaWearPersistence
+import os
 
 enum AppModelContainer {
+
+    /// Persistence-setup logger. CloudKit availability problems are otherwise
+    /// invisible — the fallback below deliberately keeps the app functional
+    /// without iCloud, which once made a broken sync setup indistinguishable
+    /// from a working one. Filter Console/Xcode output on "MetaWearPersistence".
+    private static let log = Logger(
+        subsystem: "com.mbientlab.MetaWear",
+        category: "MetaWearPersistence"
+    )
     static func makeShared(inMemory: Bool = false) throws -> AppContainers {
         try AppContainers(
             cloud: makeRememberedDeviceContainer(inMemory: inMemory),
@@ -21,7 +31,15 @@ enum AppModelContainer {
         )
 
         do {
-            return try ModelContainer(for: schema, configurations: configuration)
+            let container = try ModelContainer(for: schema, configurations: configuration)
+            if !inMemory {
+                // Note: a missing/denied iCloud account does NOT throw here —
+                // SwiftData initializes fine and sync just never runs. When
+                // diagnosing "devices don't appear on my other device", also
+                // check CoreData's own CloudKit console output.
+                log.info("RememberedDevices store opened with CloudKit enabled.")
+            }
+            return container
         } catch where !inMemory {
             // iCloud backup is deliberately best-effort. If the CloudKit-backed
             // store can't initialize (account/capability problems), reopen the
@@ -29,6 +47,11 @@ enum AppModelContainer {
             // configuration name ("RememberedDevices") matters: a different name
             // points at a separate SQLite file, orphaning any already-synced
             // remembered devices in a divergent store.
+            log.error("""
+            RememberedDevices CloudKit store failed to open — falling back to \
+            local-only. Remembered devices will NOT sync on this install. \
+            Error: \(error, privacy: .public)
+            """)
             let fallback = ModelConfiguration(
                 "RememberedDevices",
                 schema: schema,
