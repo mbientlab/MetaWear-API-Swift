@@ -25,11 +25,16 @@ struct ScanView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(appStore.rememberedDevices, id: \.peripheralUUID) { device in
+                        // Resolve to THIS host's peripheral UUID (by MAC) so a
+                        // record synced from another Apple device still gets
+                        // live status/pending-log info once the board has been
+                        // connected here.
+                        let localID = appStore.localPeripheralUUID(for: device)
                         RememberedDeviceRow(
                             remembered: device,
                             isPinned: device.peripheralUUID == pinnedID,
-                            hasPendingLog: appStore.hasPendingLog(forPeripheral: device.peripheralUUID),
-                            status: status(for: device.peripheralUUID),
+                            hasPendingLog: appStore.hasPendingLog(forPeripheral: localID),
+                            status: status(for: localID),
                             onTap: { Task { await connect(to: device) } },
                             onForget: { appStore.forget(device) }
                         )
@@ -38,8 +43,15 @@ struct ScanView: View {
             }
 
             Section("Nearby") {
+                // A discovered peripheral is "nearby" only if no remembered
+                // record claims it — either directly by UUID or through the
+                // host-local MAC mapping (a board remembered on another Apple
+                // device, already connected once here).
                 let nearby = (viewModel?.devices ?? []).filter { d in
-                    !appStore.rememberedDevices.contains { $0.peripheralUUID == d.identifier }
+                    !appStore.rememberedDevices.contains {
+                        $0.peripheralUUID == d.identifier
+                            || appStore.localPeripheralUUID(for: $0) == d.identifier
+                    }
                 }
                 if appStore.scanner.isBluetoothUnavailable {
                     // Without this, Bluetooth-off shows an eternal "Scanning…".
@@ -156,7 +168,11 @@ struct ScanView: View {
     }
 
     private func connect(to remembered: RememberedDevice) async {
-        let device = appStore.scanner.device(forKnownIdentifier: remembered.peripheralUUID)
+        // Resolve through the host-local MAC mapping: a record created on
+        // another Apple device carries that host's peripheral UUID, which
+        // CoreBluetooth here can't connect to.
+        let localID = appStore.localPeripheralUUID(for: remembered)
+        let device = appStore.scanner.device(forKnownIdentifier: localID)
         await appStore.connect(to: device)
         selectedDeviceID = device.identifier
         showDetail()

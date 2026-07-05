@@ -44,6 +44,7 @@ final class AppStore {
         self.containers = containers
         self.scanner = MetaWearScanner()
         self.persistence = MWPersistenceStore(modelContainer: containers.local)
+        loadLocalPeripheralMap()
         refreshRememberedDevices()
         refreshPendingLogSessions()
     }
@@ -428,21 +429,29 @@ final class AppStore {
         guard device.identifier != DemoBLETransport.deviceIdentifier else { return }
         let info = await device.deviceInfo
         let id = device.identifier
+        // The MAC address is the only identity that survives across the
+        // user's Apple devices: CoreBluetooth peripheral UUIDs are generated
+        // per host, so a record synced from the iPhone can't be matched to
+        // an on-air peripheral on the Mac by UUID alone.
+        let mac = try? await device.read(MWSettings.ReadMacAddress()).value
+        if let mac { recordLocalPeripheral(mac: mac, uuid: id) }
+
         let context = containers.cloud.mainContext
-        let descriptor = FetchDescriptor<RememberedDevice>(
-            predicate: #Predicate { $0.peripheralUUID == id }
+        let existing = Self.reconcileRememberedDevice(
+            in: context, peripheralUUID: id, macAddress: mac
         )
-        let existing = (try? context.fetch(descriptor))?.first
         if let existing {
             existing.lastConnected = .now
             existing.name = scanner.advertisedNames[id] ?? existing.name
             existing.serialNumber = info?.serialNumber ?? existing.serialNumber
             existing.firmwareRevision = info?.firmwareRevision ?? existing.firmwareRevision
             existing.modelNumber = info?.modelNumber ?? existing.modelNumber
+            if let mac { existing.macAddress = mac }
         } else {
             let record = RememberedDevice(
                 peripheralUUID: id,
                 name: scanner.advertisedNames[id] ?? "MetaWear",
+                macAddress: mac,
                 lastConnected: .now,
                 serialNumber: info?.serialNumber,
                 firmwareRevision: info?.firmwareRevision,
@@ -452,6 +461,78 @@ final class AppStore {
         }
         try? context.save()
         refreshRememberedDevices()
+    }
+
+    /// Find the synced row for a board identified by this host's peripheral
+    /// UUID and (when readable) its MAC address, folding duplicates.
+    ///
+    /// MAC match wins: it's the same physical board even when it was
+    /// remembered by another host under that host's peripheral UUID. If a
+    /// UUID-keyed row ALSO exists and is a different object (the board was
+    /// remembered here before MAC backfill existed), it's a duplicate of the
+    /// same hardware — fold it by deleting the UUID row and keeping the MAC
+    /// row, which other hosts may already reference.
+    static func reconcileRememberedDevice(
+        in context: ModelContext,
+        peripheralUUID: UUID,
+        macAddress: String?
+    ) -> RememberedDevice? {
+        let uuidDescriptor = FetchDescriptor<RememberedDevice>(
+            predicate: #Predicate { $0.peripheralUUID == peripheralUUID }
+        )
+        let byUUID = (try? context.fetch(uuidDescriptor))?.first
+        guard macAddress != nil else { return byUUID }
+        // Compare optional-to-optional: SwiftData's #Predicate fatalErrors at
+        // fetch time when an optional stored property is compared against a
+        // non-optional value (the implicit promotion isn't translatable).
+        let mac: String? = macAddress
+        let macDescriptor = FetchDescriptor<RememberedDevice>(
+            predicate: #Predicate { $0.macAddress == mac }
+        )
+        guard let byMAC = (try? context.fetch(macDescriptor))?.first else {
+            return byUUID
+        }
+        if let byUUID, byUUID !== byMAC {
+            context.delete(byUUID)
+        }
+        return byMAC
+    }
+
+    // MARK: - Host-local peripheral resolution
+
+    /// Host-local map from board MAC address to THIS host's CoreBluetooth
+    /// peripheral UUID, built as boards are connected here. Lives in
+    /// UserDefaults precisely because it must never sync: peripheral UUIDs
+    /// are meaningless on any other host.
+    private static let localPeripheralsKey = "MWLocalPeripheralUUIDByMAC"
+
+    private(set) var localPeripheralUUIDByMAC: [String: UUID] = [:]
+
+    func loadLocalPeripheralMap() {
+        let raw = UserDefaults.standard.dictionary(forKey: Self.localPeripheralsKey) as? [String: String] ?? [:]
+        localPeripheralUUIDByMAC = raw.compactMapValues(UUID.init(uuidString:))
+    }
+
+    private func recordLocalPeripheral(mac: String, uuid: UUID) {
+        guard localPeripheralUUIDByMAC[mac] != uuid else { return }
+        localPeripheralUUIDByMAC[mac] = uuid
+        UserDefaults.standard.set(
+            localPeripheralUUIDByMAC.mapValues(\.uuidString),
+            forKey: Self.localPeripheralsKey
+        )
+    }
+
+    /// Resolve which peripheral UUID represents a remembered board on THIS
+    /// host: the local mapping by MAC when we've connected it here before,
+    /// else the record's own UUID (correct on the host that remembered it).
+    /// A record synced from another host resolves to its foreign UUID until
+    /// the board is connected once on this host — until then it can appear
+    /// "offline" while the same hardware shows under Nearby.
+    func localPeripheralUUID(for remembered: RememberedDevice) -> UUID {
+        if let mac = remembered.macAddress, let local = localPeripheralUUIDByMAC[mac] {
+            return local
+        }
+        return remembered.peripheralUUID
     }
 }
 

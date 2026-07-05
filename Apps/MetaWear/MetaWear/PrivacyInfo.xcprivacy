@@ -16,15 +16,15 @@
 	  Files) and stay under the user's control. No data is transmitted to
 	  MbientLab servers or any third party.
 
-	  NSPrivacyAccessedAPITypes: empty. A code audit of the app target and the
-	  first-party MetaWear SDK targets found no required-reason API usage
-	  (no UserDefaults, file-timestamp, disk-space, active-keyboard, or
-	  system-boot-time access). The bundled third-party SDKs (NordicDFU and
-	  ZIPFoundation, linked via MetaWearFirmware) ship their own privacy
-	  manifests, which Xcode aggregates into the archive's privacy report.
-
-	  NOTE: if a future build adds @AppStorage/UserDefaults, add an entry for
-	  NSPrivacyAccessedAPICategoryUserDefaults with reason "CA92.1".
+	  NSPrivacyAccessedAPITypes: UserDefaults (CA92.1 — access data written
+	  only by the app itself). Used for the host-local map of board MAC
+	  addresses to this device's CoreBluetooth peripheral UUIDs, which links
+	  iCloud-synced remembered boards to locally discovered peripherals. A code
+	  audit found no other required-reason API usage (no file-timestamp,
+	  disk-space, active-keyboard, or system-boot-time access). The bundled
+	  third-party SDKs (NordicDFU and ZIPFoundation, linked via
+	  MetaWearFirmware) ship their own privacy manifests, which Xcode
+	  aggregates into the archive's privacy report.
 	-->
 	<key>NSPrivacyTracking</key>
 	<false/>
@@ -33,6 +33,15 @@
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array/>
 	<key>NSPrivacyAccessedAPITypes</key>
-	<array/>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
