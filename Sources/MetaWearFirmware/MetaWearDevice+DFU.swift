@@ -142,22 +142,8 @@ extension MetaWearDevice {
         fetcher: MWFirmwareFetcher,
         continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation
     ) async throws {
-        // 1. State check. Mid-stream / mid-log / mid-download is unsafe (the
-        //    user should stop those first) — but "not connected" is a
-        //    different situation deserving a different error: BLE links drop
-        //    silently (supervision timeouts), and telling the user to "stop
-        //    streaming" when the board simply disconnected sends them
-        //    debugging the wrong thing.
-        switch self.state {
-        case .idle:
-            break
-        case .disconnected, .connecting:
-            throw MWFirmwareError.operationFailed(
-                "The board is not connected. Reconnect and try again."
-            )
-        default:
-            throw MWFirmwareError.deviceNotIdle
-        }
+        // 1. State check.
+        try self._ensureFlashableState()
 
         // 2. Resolve the firmware URL to a local file. Remote URLs go
         //    through the fetcher; file:// URLs are used as-is.
@@ -178,48 +164,113 @@ extension MetaWearDevice {
         //    bootloader-mode peripheral once BLE drops.
         let targetIdentifier = self.identifier
 
-        // 5. Bootloader handoff: send jump-to-bootloader and wait for the
-        //    BOARD to drop the link as it reboots into MetaBoot. Cancelling
-        //    the connection from our side raced the reboot: Nordic would
-        //    reconnect to a board still running app-mode firmware and fail
-        //    service discovery with "DFU Service not found" (302).
+        // 5. Bootloader handoff, then a single-stage flash. The explicit-URL
+        //    path has no catalog metadata, so no bootloader interlock applies
+        //    here — callers flashing custom firmware are expected to know
+        //    their board's bootloader.
+        try await self._handoffToBootloader(continuation: continuation)
+        try await self._flashStages(
+            [firmware],
+            targetIdentifier: targetIdentifier,
+            continuation: continuation
+        )
+    }
+
+    /// Mid-stream / mid-log / mid-download is unsafe (the user should stop
+    /// those first) — but "not connected" is a different situation deserving
+    /// a different error: BLE links drop silently (supervision timeouts),
+    /// and telling the user to "stop streaming" when the board simply
+    /// disconnected sends them debugging the wrong thing.
+    fileprivate func _ensureFlashableState() throws {
+        switch self.state {
+        case .idle:
+            break
+        case .disconnected, .connecting:
+            throw MWFirmwareError.operationFailed(
+                "The board is not connected. Reconnect and try again."
+            )
+        default:
+            throw MWFirmwareError.deviceNotIdle
+        }
+    }
+
+    /// Send jump-to-bootloader and wait for the BOARD to drop the link as it
+    /// reboots into MetaBoot. Cancelling the connection from our side raced
+    /// the reboot: Nordic would reconnect to a board still running app-mode
+    /// firmware and fail service discovery with "DFU Service not found" (302).
+    fileprivate func _handoffToBootloader(
+        continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation
+    ) async throws {
         continuation.yield(DFUProgress(state: .bootloaderHandoff))
         try await self.sendExpectingDisconnect(MWDebug.JumpToBootloader())
-
-        //    Give MetaBoot time to finish booting and start advertising
-        //    before Nordic's connect request goes out.
+        // Give MetaBoot time to finish booting and start advertising before
+        // anything connects to it.
         try? await Task.sleep(for: .milliseconds(1500))
+    }
 
-        // 6. Hand off to Nordic. DFUSession runs on its own dispatch queue
-        //    and yields events into our continuation. If Nordic still loses
-        //    the race (connects into the pre-reboot window / stale GATT),
-        //    retry once — MetaBoot sits waiting after boot, so a delayed
-        //    second pass is safe.
-        continuation.yield(DFUProgress(state: .scanning))
-        do {
-            try await Self._runDFUPass(
-                firmware: firmware,
-                targetIdentifier: targetIdentifier,
-                continuation: continuation
-            )
-        } catch MWFirmwareError.dfuFailed(let message)
-            where message.contains("DFU Service not found") {
-            mwFirmwareLog("[DFU] service not found — retrying once after settle delay")
-            try? await Task.sleep(for: .seconds(2))
-            continuation.yield(DFUProgress(state: .scanning))
-            try await Self._runDFUPass(
-                firmware: firmware,
-                targetIdentifier: targetIdentifier,
-                continuation: continuation
-            )
+    /// Flash one or more firmware images in sequence — bootloader first when
+    /// the interlock demands it, then the application. Each stage is one
+    /// Nordic DFU run; after a bootloader stage the board resets back into
+    /// MetaBoot (there's no valid application to boot into yet).
+    ///
+    /// Progress from every stage is renumbered so observers see stage-level
+    /// `currentPart`/`totalParts`, and `.completed` is suppressed for all but
+    /// the final stage — only the whole sequence finishing means "done".
+    fileprivate func _flashStages(
+        _ stages: [DFUFirmware],
+        targetIdentifier: UUID,
+        continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation
+    ) async throws {
+        let total = stages.count
+        for (index, firmware) in stages.enumerated() {
+            // A cancelled task must never start (or continue past) a Nordic
+            // DFU pass — DFUSession.run fires initiator.start synchronously
+            // before iteration can observe the cancellation.
+            try Task.checkCancellation()
+            let stage = index + 1
+            let isLast = stage == total
+            continuation.yield(DFUProgress(
+                state: .scanning, currentPart: stage, totalParts: total
+            ))
+            do {
+                try await _runDFUPass(
+                    firmware: firmware, targetIdentifier: targetIdentifier,
+                    stage: stage, of: total, isLast: isLast,
+                    continuation: continuation
+                )
+            } catch MWFirmwareError.dfuFailed(let message)
+                where message.contains("DFU Service not found") {
+                // Nordic lost the reconnect race (pre-reboot window / stale
+                // GATT). MetaBoot sits waiting after boot, so one delayed
+                // retry per stage is safe.
+                mwFirmwareLog("[DFU] service not found — retrying once after settle delay")
+                try? await Task.sleep(for: .seconds(2))
+                continuation.yield(DFUProgress(
+                    state: .scanning, currentPart: stage, totalParts: total
+                ))
+                try await _runDFUPass(
+                    firmware: firmware, targetIdentifier: targetIdentifier,
+                    stage: stage, of: total, isLast: isLast,
+                    continuation: continuation
+                )
+            }
+            if !isLast {
+                mwFirmwareLog("[DFU] stage \(stage)/\(total) flashed — waiting for reboot into MetaBoot")
+                // Throwing sleep on purpose: cancellation between stages must
+                // abort the sequence, not fall through into the next flash.
+                try await Task.sleep(for: .milliseconds(2500))
+            }
         }
     }
 
     /// One Nordic DFU attempt. `DFUSession` is single-use, so each pass gets
     /// a fresh session and queue.
-    fileprivate static func _runDFUPass(
+    fileprivate func _runDFUPass(
         firmware: DFUFirmware,
         targetIdentifier: UUID,
+        stage: Int,
+        of total: Int,
+        isLast: Bool,
         continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation
     ) async throws {
         let session = DFUSession()
@@ -233,11 +284,34 @@ extension MetaWearDevice {
             queue: queue
         )
         for try await progress in dfuStream {
-            continuation.yield(progress)
+            // A non-final stage finishing is progress, not completion.
+            if progress.state == .completed && !isLast { continue }
+            guard total > 1 else {
+                continuation.yield(progress)
+                continue
+            }
+            continuation.yield(DFUProgress(
+                state: progress.state,
+                percentComplete: progress.percentComplete,
+                currentPart: stage,
+                totalParts: total,
+                bytesPerSecond: progress.bytesPerSecond
+            ))
         }
+        // AsyncThrowingStream's next() returns nil on task cancellation
+        // instead of throwing — a cancelled iteration must not read as
+        // stage success (the next stage would flash a half-written board).
+        if Task.isCancelled { throw MWFirmwareError.aborted }
     }
 
     /// Driver for `updateFirmwareToLatest(server:)`.
+    ///
+    /// Adds the bootloader interlock the explicit-URL path can't have: after
+    /// the MetaBoot handoff, the on-board bootloader version is read from the
+    /// bootloader's Device Information service and compared against the
+    /// target build's `requiredBootloader`. An outdated bootloader turns the
+    /// update into a two-stage flash (catalog "bootloader" flavor first, then
+    /// the application), surfaced through `currentPart`/`totalParts`.
     fileprivate func _runUpdateToLatest(
         server: MWFirmwareServer,
         continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation
@@ -260,19 +334,96 @@ extension MetaWearDevice {
             return
         }
 
-        // The orchestrator below downloads the firmware, but yield this
-        // event first so the caller sees the phase transition.
         continuation.yield(DFUProgress(state: .downloadingFirmware))
-        let localURL = try await server.downloadFirmware(build)
+        let applicationURL = try await server.downloadFirmware(build)
+        // Parse before tearing down BLE so a bad artifact bails out while
+        // the board is still in application mode.
+        let application = try Self._makeDFUFirmware(from: applicationURL)
 
-        // Delegate to the explicit-URL path. _runFirmwareUpdate also
-        // yields .downloadingFirmware for remote URLs; calling with the
-        // file:// URL we just produced bypasses the duplicate yield.
-        try await self._runFirmwareUpdate(
-            zipURL: localURL,
-            fetcher: URLSessionFetcher(),
+        try self._ensureFlashableState()
+        let targetIdentifier = self.identifier
+        try await self._handoffToBootloader(continuation: continuation)
+
+        var stages: [DFUFirmware] = []
+        if build.requiredBootloader != nil {
+            stages = try await self._bootloaderStagesIfNeeded(
+                for: build,
+                deviceInfo: info,
+                server: server,
+                targetIdentifier: targetIdentifier,
+                continuation: continuation
+            )
+        }
+        stages.append(application)
+        try await self._flashStages(
+            stages,
+            targetIdentifier: targetIdentifier,
             continuation: continuation
         )
+    }
+
+    /// Read the installed bootloader from MetaBoot and, when it's older than
+    /// the build's requirement, download the chain of catalog bootloaders
+    /// that fixes it (bootloader builds declare requirements of their own,
+    /// so one upgrade may need stepping stones).
+    ///
+    /// A failed PROBE degrades to a single-stage flash (pre-interlock
+    /// behavior) rather than blocking the update: near-all boards in the
+    /// field already run an adequate bootloader, and a flaky characteristic
+    /// read shouldn't strand them. Cancellation is NOT a probe failure and
+    /// is rethrown — a cancelled update must never proceed to flash. A
+    /// confirmed-outdated bootloader with no catalog remedy throws
+    /// `bootloaderUpgradeUnavailable`; catalog fetch errors propagate as
+    /// themselves so a transient network blip doesn't masquerade as that
+    /// terminal verdict.
+    fileprivate func _bootloaderStagesIfNeeded(
+        for build: MWFirmwareBuild,
+        deviceInfo info: MWDeviceInformation,
+        server: MWFirmwareServer,
+        targetIdentifier: UUID,
+        continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation
+    ) async throws -> [DFUFirmware] {
+        let installed: String
+        do {
+            installed = try await MetaBootProbe.readBootloaderVersion(
+                identifier: targetIdentifier
+            )
+            mwFirmwareLog("[DFU] MetaBoot reports bootloader \(installed)")
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch MWFirmwareError.aborted {
+            throw MWFirmwareError.aborted
+        } catch {
+            mwFirmwareLog("[DFU] ⚠️  bootloader probe failed (\(error.localizedDescription)) — flashing application only")
+            return []
+        }
+        let bootloaders = try await server.availableBuilds(
+            hardwareRev: info.hardwareRevision,
+            modelNumber: info.modelNumber,
+            buildFlavor: "bootloader"
+        )
+        let plan = try BootloaderInterlock.plan(
+            installedBootloader: installed,
+            requiredBootloader: build.requiredBootloader,
+            availableBootloaders: bootloaders,
+            hardwareRev: info.hardwareRevision
+        )
+        guard case .flashBootloadersFirst(let chain) = plan else {
+            return []
+        }
+        mwFirmwareLog("[DFU] bootloader \(installed) < required \(build.requiredBootloader ?? "?") — staging \(chain.map(\.firmwareRev).joined(separator: " → "))")
+        let total = chain.count + 1
+        var firmwares: [DFUFirmware] = []
+        for (index, bootloaderBuild) in chain.enumerated() {
+            continuation.yield(DFUProgress(
+                state: .downloadingFirmware,
+                currentPart: index + 1,
+                totalParts: total
+            ))
+            let url = try await server.downloadFirmware(bootloaderBuild)
+            firmwares.append(try Self._makeDFUFirmware(from: url))
+        }
+        return firmwares
     }
 
     // MARK: - Helpers
