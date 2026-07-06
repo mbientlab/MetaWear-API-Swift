@@ -24,7 +24,12 @@ struct ScanView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(appStore.rememberedDevices, id: \.peripheralUUID) { device in
+                    // Keyed by SwiftData identity, not peripheralUUID: CloudKit
+                    // sync resets can transiently duplicate rows (same UUID),
+                    // and duplicate ForEach IDs are undefined behavior. The
+                    // dedupe sweep in refreshRememberedDevices folds them, but
+                    // rendering must stay safe in the window before it runs.
+                    ForEach(appStore.rememberedDevices, id: \.persistentModelID) { device in
                         // Resolve to THIS host's peripheral UUID (by MAC) so a
                         // record synced from another Apple device still gets
                         // live status/pending-log info once the board has been

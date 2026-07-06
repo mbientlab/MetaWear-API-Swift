@@ -409,7 +409,82 @@ final class AppStore {
         let descriptor = FetchDescriptor<RememberedDevice>(
             sortBy: [SortDescriptor(\.lastConnected, order: .reverse)]
         )
-        rememberedDevices = (try? context.fetch(descriptor)) ?? []
+        var records = (try? context.fetch(descriptor)) ?? []
+        // CloudKit forbids unique constraints and its sync-state resets
+        // ("Change Token Expired" recoveries) can re-import server rows next
+        // to their local twins, so duplicates are a fact of life — sweep them
+        // on every refresh. The keeper choice is deterministic so every host
+        // deletes the SAME losers and the fold converges instead of hosts
+        // fighting over which twin survives.
+        let deduped = Self.dedupeRememberedDevices(records, in: context)
+        if deduped.count != records.count {
+            Self.log.info("Folded \(records.count - deduped.count) duplicate remembered-device rows")
+            try? context.save()
+            records = deduped
+        }
+        rememberedDevices = records
+    }
+
+    /// Fold records describing the same physical board — same MAC address,
+    /// or same peripheral UUID (possible after a CloudKit sync-state reset
+    /// resurrects a row) — into one deterministic keeper, merging fields the
+    /// keeper lacks and deleting the rest.
+    ///
+    /// Keeper rule: newest `lastConnected`, tie-broken by MAC presence and
+    /// then peripheral UUID string — all values that sync identically to
+    /// every host, so all hosts converge on the same keeper.
+    static func dedupeRememberedDevices(
+        _ records: [RememberedDevice],
+        in context: ModelContext
+    ) -> [RememberedDevice] {
+        func identity(_ record: RememberedDevice) -> String {
+            record.macAddress ?? "uuid:\(record.peripheralUUID.uuidString)"
+        }
+        func precedence(_ record: RememberedDevice) -> (Date, Int, String) {
+            (record.lastConnected, record.macAddress == nil ? 0 : 1,
+             record.peripheralUUID.uuidString)
+        }
+
+        var keepers: [String: RememberedDevice] = [:]
+        var order: [String] = []
+        for record in records {
+            let key = identity(record)
+            guard let existing = keepers[key] else {
+                keepers[key] = record
+                order.append(key)
+                continue
+            }
+            let (keeper, loser) = precedence(record) > precedence(existing)
+                ? (record, existing) : (existing, record)
+            // Merge anything the keeper is missing before dropping the twin.
+            keeper.macAddress = keeper.macAddress ?? loser.macAddress
+            keeper.serialNumber = keeper.serialNumber ?? loser.serialNumber
+            keeper.firmwareRevision = keeper.firmwareRevision ?? loser.firmwareRevision
+            keeper.modelNumber = keeper.modelNumber ?? loser.modelNumber
+            keepers[key] = keeper
+            context.delete(loser)
+        }
+        // Second pass: a MAC-less row whose peripheralUUID matches a
+        // MAC-bearing keeper is the same board pre-backfill — fold it too.
+        var byUUID: [UUID: String] = [:]
+        for key in order {
+            guard let record = keepers[key] else { continue }
+            if let existingKey = byUUID[record.peripheralUUID],
+               let existing = keepers[existingKey] {
+                let (keeper, loser) = precedence(record) > precedence(existing)
+                    ? (record, existing) : (existing, record)
+                keeper.macAddress = keeper.macAddress ?? loser.macAddress
+                keeper.serialNumber = keeper.serialNumber ?? loser.serialNumber
+                keeper.firmwareRevision = keeper.firmwareRevision ?? loser.firmwareRevision
+                keeper.modelNumber = keeper.modelNumber ?? loser.modelNumber
+                keepers[existingKey] = keeper
+                keepers[key] = nil
+                context.delete(loser)
+            } else {
+                byUUID[record.peripheralUUID] = key
+            }
+        }
+        return order.compactMap { keepers[$0] }
     }
 
     func refreshPendingLogSessions() {
