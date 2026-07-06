@@ -33,6 +33,16 @@ public final class MetaWearScanner {
     /// before a scan to prove a fresh advertisement arrived.
     public private(set) var advertisementManufacturerData: [UUID: Data] = [:]
 
+    /// MAC addresses parsed from MbientLab manufacturer-specific
+    /// advertisement data (company `0x626D`), keyed by peripheral UUID.
+    /// Only boards configured via `MetaWearDevice.enableMACAdvertisement()`
+    /// broadcast this — stock firmware does not — so absence here says
+    /// nothing about a board. The MAC is the only identity that survives
+    /// across the user's Apple devices (peripheral UUIDs are generated per
+    /// host), so this map lets apps recognize a synced remembered board on
+    /// air without connecting.
+    public private(set) var advertisedMACs: [UUID: String] = [:]
+
     /// Most-recently-seen RSSI (in dBm) for each peripheral UUID observed in
     /// advertisements during a scan. Refreshed on every advertisement so UI
     /// can show live signal strength without polling the connected device.
@@ -121,6 +131,11 @@ public final class MetaWearScanner {
                 // company-ID payload broadcast on air.
                 if let mfg = result.manufacturerData {
                     self.advertisementManufacturerData[id] = mfg
+                    // Boards configured to broadcast their MAC (company
+                    // 0x626D) identify themselves here without a connection.
+                    if let mac = MWMACAdvertisement.mac(fromManufacturerData: mfg) {
+                        self.advertisedMACs[id] = mac
+                    }
                 }
                 mwLogVerbose("[Scanner] discovered: \(id) name='\(name)'")
                 // Accept only MetaWear peripherals (name starts with "MetaWear").

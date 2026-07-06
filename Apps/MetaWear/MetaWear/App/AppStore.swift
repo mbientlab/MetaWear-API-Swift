@@ -3,6 +3,7 @@ import Observation
 import SwiftData
 import MetaWear
 import MetaWearPersistence
+import os
 
 /// Main app coordinator shared by the SwiftUI scene.
 ///
@@ -13,6 +14,12 @@ import MetaWearPersistence
 @Observable
 @MainActor
 final class AppStore {
+
+    /// Cross-feature diagnostics (filter Console on "MetaWearSync").
+    static let log = Logger(
+        subsystem: "com.mbientlab.MetaWear",
+        category: "MetaWearSync"
+    )
 
     let scanner: MetaWearScanner
     let containers: AppContainers
@@ -434,7 +441,12 @@ final class AppStore {
         // per host, so a record synced from the iPhone can't be matched to
         // an on-air peripheral on the Mac by UUID alone.
         let mac = try? await device.read(MWSettings.ReadMacAddress()).value
-        if let mac { recordLocalPeripheral(mac: mac, uuid: id) }
+        if let mac {
+            recordLocalPeripheral(mac: mac, uuid: id)
+            // While connected anyway, teach the board to broadcast its MAC so
+            // the user's OTHER devices recognize it on air (one-time, gated).
+            await configureMACAdvertisementIfNeeded(device, id: id, mac: mac)
+        }
 
         let context = containers.cloud.mainContext
         let existing = Self.reconcileRememberedDevice(
@@ -511,6 +523,9 @@ final class AppStore {
     func loadLocalPeripheralMap() {
         let raw = UserDefaults.standard.dictionary(forKey: Self.localPeripheralsKey) as? [String: String] ?? [:]
         localPeripheralUUIDByMAC = raw.compactMapValues(UUID.init(uuidString:))
+        macAdvertisementConfigured = Set(
+            UserDefaults.standard.stringArray(forKey: Self.configuredMACAdKey) ?? []
+        )
     }
 
     private func recordLocalPeripheral(mac: String, uuid: UUID) {
@@ -523,16 +538,85 @@ final class AppStore {
     }
 
     /// Resolve which peripheral UUID represents a remembered board on THIS
-    /// host: the local mapping by MAC when we've connected it here before,
-    /// else the record's own UUID (correct on the host that remembered it).
-    /// A record synced from another host resolves to its foreign UUID until
-    /// the board is connected once on this host — until then it can appear
-    /// "offline" while the same hardware shows under Nearby.
+    /// host, in order of confidence:
+    ///   1. The host-local mapping by MAC (built when the board was connected
+    ///      here before).
+    ///   2. A live advertisement broadcasting the record's MAC — boards the
+    ///      app has touched anywhere are configured to self-identify on air
+    ///      (`enableMACAdvertisement`), so a record synced from another host
+    ///      matches its nearby twin without ever connecting here.
+    ///   3. The record's own UUID (correct on the host that remembered it).
     func localPeripheralUUID(for remembered: RememberedDevice) -> UUID {
-        if let mac = remembered.macAddress, let local = localPeripheralUUIDByMAC[mac] {
+        guard let mac = remembered.macAddress else { return remembered.peripheralUUID }
+        if let local = localPeripheralUUIDByMAC[mac] {
             return local
         }
+        if let onAir = scanner.advertisedMACs.first(where: { $0.value == mac })?.key {
+            return onAir
+        }
         return remembered.peripheralUUID
+    }
+
+    // MARK: - Board MAC self-identification
+
+    /// Host-local set of board MACs this host has already configured to
+    /// broadcast their MAC (an on-boot macro uses a finite flash slot, so
+    /// configuration must not repeat on every connect).
+    private static let configuredMACAdKey = "MWMACAdvertisementConfigured"
+
+    private(set) var macAdvertisementConfigured: Set<String> = []
+
+    private func markMACAdvertisementConfigured(_ mac: String) {
+        guard macAdvertisementConfigured.insert(mac).inserted else { return }
+        UserDefaults.standard.set(
+            Array(macAdvertisementConfigured),
+            forKey: Self.configuredMACAdKey
+        )
+    }
+
+    /// One-time board configuration: make it broadcast its MAC so every
+    /// other Apple device recognizes it during scanning (peripheral UUIDs
+    /// are host-specific; the advertised MAC is the shared identity).
+    /// Failures are logged and ignored — the connect-time mapping still
+    /// covers this host, and the next connect retries.
+    private func configureMACAdvertisementIfNeeded(
+        _ device: MetaWearDevice, id: UUID, mac: String
+    ) async {
+        guard Self.shouldConfigureMACAdvertisement(
+            observedMAC: scanner.advertisedMACs[id],
+            lastAdvertisementSeen: scanner.advertisementLastSeen[id],
+            alreadyConfigured: macAdvertisementConfigured.contains(mac),
+            now: .now
+        ) else { return }
+        do {
+            try await device.enableMACAdvertisement(
+                advertisedName: scanner.advertisedNames[id] ?? "MetaWear"
+            )
+            markMACAdvertisementConfigured(mac)
+            Self.log.info("Configured MAC advertisement for \(mac, privacy: .public)")
+        } catch {
+            Self.log.error("MAC advertisement configuration failed for \(mac, privacy: .public): \(error, privacy: .public)")
+        }
+    }
+
+    /// Pure decision gate for the one-time configuration, unit-tested.
+    ///
+    /// Configure only when this host RECENTLY observed the board advertising
+    /// WITHOUT a MAC (a fresh advertisement proves the current scan-response
+    /// content) and hasn't already configured it. If no advertisement was
+    /// observed — e.g. a direct reconnect to a known identifier without a
+    /// scan — we can't judge the board's current state, so do nothing rather
+    /// than risk stacking duplicate on-boot macros.
+    static func shouldConfigureMACAdvertisement(
+        observedMAC: String?,
+        lastAdvertisementSeen: Date?,
+        alreadyConfigured: Bool,
+        now: Date
+    ) -> Bool {
+        guard observedMAC == nil, !alreadyConfigured,
+              let seen = lastAdvertisementSeen,
+              now.timeIntervalSince(seen) < 15 * 60 else { return false }
+        return true
     }
 }
 
