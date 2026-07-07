@@ -17,6 +17,17 @@ struct ScanView: View {
     }
 
     var body: some View {
+        // Staleness must become visible even when NOTHING changes: a board
+        // that powers off or connects elsewhere stops advertising, and silence
+        // triggers no observation updates — without a clock, its last-seen
+        // state (row present, RSSI frozen) would linger indefinitely. The
+        // 1 s timeline re-evaluates freshness so silent boards drop out.
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            content(now: timeline.date)
+        }
+    }
+
+    private func content(now: Date) -> some View {
         List {
             Section("Remembered") {
                 if appStore.rememberedDevices.isEmpty {
@@ -24,7 +35,12 @@ struct ScanView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(appStore.rememberedDevices, id: \.peripheralUUID) { device in
+                    // Keyed by SwiftData identity, not peripheralUUID: CloudKit
+                    // sync resets can transiently duplicate rows (same UUID),
+                    // and duplicate ForEach IDs are undefined behavior. The
+                    // dedupe sweep in refreshRememberedDevices folds them, but
+                    // rendering must stay safe in the window before it runs.
+                    ForEach(appStore.rememberedDevices, id: \.persistentModelID) { device in
                         // Resolve to THIS host's peripheral UUID (by MAC) so a
                         // record synced from another Apple device still gets
                         // live status/pending-log info once the board has been
@@ -34,7 +50,7 @@ struct ScanView: View {
                             remembered: device,
                             isPinned: device.peripheralUUID == pinnedID,
                             hasPendingLog: appStore.hasPendingLog(forPeripheral: localID),
-                            status: status(for: localID),
+                            status: status(for: localID, now: now),
                             onTap: { Task { await connect(to: device) } },
                             onForget: { appStore.forget(device) }
                         )
@@ -43,12 +59,20 @@ struct ScanView: View {
             }
 
             Section("Nearby") {
-                // A discovered peripheral is "nearby" only if no remembered
-                // record claims it — either directly by UUID or through the
-                // host-local MAC mapping (a board remembered on another Apple
-                // device, already connected once here).
+                // A discovered peripheral is "nearby" only if it's actually
+                // ON AIR — an advertisement within the freshness window; the
+                // scanner's discovery cache is append-only, so without this a
+                // powered-off or connected-elsewhere board would keep showing
+                // as connectable with a frozen RSSI — and no remembered record
+                // claims it, either directly by UUID or through the host-local
+                // MAC mapping (a board remembered on another Apple device,
+                // already connected once here).
                 let nearby = (viewModel?.devices ?? []).filter { d in
-                    !appStore.rememberedDevices.contains {
+                    DeviceFreshness.isFresh(
+                        lastSeen: appStore.scanner.advertisementLastSeen[d.identifier],
+                        now: now
+                    )
+                    && !appStore.rememberedDevices.contains {
                         $0.peripheralUUID == d.identifier
                             || appStore.localPeripheralUUID(for: $0) == d.identifier
                     }
@@ -145,12 +169,7 @@ struct ScanView: View {
         .onDisappear { viewModel?.stopScan() }
     }
 
-    /// Window after the last advertisement during which we still consider the
-    /// device "available" on air. Advertisements normally arrive several times
-    /// per second; 8 s tolerates one missed scan cycle without flicker.
-    private static let availableFreshnessWindow: TimeInterval = 8
-
-    private func status(for uuid: UUID) -> DeviceConnectionStatus {
+    private func status(for uuid: UUID, now: Date) -> DeviceConnectionStatus {
         if appStore.activeDeviceID == uuid,
            appStore.connectionState != .disconnected,
            appStore.connectingDeviceID != uuid {
@@ -159,9 +178,9 @@ struct ScanView: View {
         if appStore.connectingDeviceID == uuid {
             return .connecting
         }
-        let lastSeen = appStore.scanner.advertisementLastSeen[uuid]
-        let fresh = lastSeen.map { Date.now.timeIntervalSince($0) < Self.availableFreshnessWindow } ?? false
-        if fresh {
+        if DeviceFreshness.isFresh(
+            lastSeen: appStore.scanner.advertisementLastSeen[uuid], now: now
+        ) {
             return .available(rssi: appStore.scanner.advertisementRSSI[uuid])
         }
         return .offline
