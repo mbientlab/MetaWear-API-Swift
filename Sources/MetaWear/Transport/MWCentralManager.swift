@@ -115,7 +115,14 @@ actor MWCentralManager: NSObject {
             return
         }
         mwLog("[BLE] beginScan: starting scan")
-        central.scanForPeripherals(withServices: services, options: nil)
+        central.scanForPeripherals(
+            withServices: services,
+            // Without allow-duplicates, iOS delivers each peripheral ONCE per
+            // scan session - advertisementLastSeen would freeze at discovery
+            // and presence/RSSI could never update. Scans here are foreground
+            // + user-visible, the sanctioned use for this energy-costly flag.
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+        )
     }
 
     private func endScan() {
@@ -185,7 +192,14 @@ extension MWCentralManager: CBCentralManagerDelegate {
         if state == .poweredOn, scanContinuation != nil {
             // A scan was requested before BT was ready — start it now.
             mwLog("[BLE] handleStateUpdate: BT now poweredOn, starting deferred scan")
-            central.scanForPeripherals(withServices: pendingScanServices, options: nil)
+            central.scanForPeripherals(
+            withServices: pendingScanServices,
+            // Without allow-duplicates, iOS delivers each peripheral ONCE per
+            // scan session - advertisementLastSeen would freeze at discovery
+            // and presence/RSSI could never update. Scans here are foreground
+            // + user-visible, the sanctioned use for this energy-costly flag.
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+        )
         }
     }
 
