@@ -121,15 +121,34 @@ public final class MetaWearScanner {
             for await result in stream {
                 let id = result.identifier
                 let name = result.name ?? ""
+                // The scan runs with allow-duplicates (presence and RSSI must
+                // keep updating), so advertisements arrive several times per
+                // second per board. Guard every write on actual change —
+                // @Observable treats same-value dictionary writes as
+                // mutations, and unguarded writes would invalidate observers
+                // at advertising rate.
+                //
                 // Record every advertisement's name so renamed devices remain
                 // observable even when they no longer match the MetaWear prefix.
-                self.advertisedNames[id] = name
-                self.advertisementRSSI[id] = result.rssi
-                self.advertisementLastSeen[id] = .now
+                if self.advertisedNames[id] != name {
+                    self.advertisedNames[id] = name
+                }
+                if self.advertisementRSSI[id] != result.rssi {
+                    self.advertisementRSSI[id] = result.rssi
+                }
+                // 1 s granularity is plenty for the UI's freshness window.
+                if let seen = self.advertisementLastSeen[id] {
+                    if Date.now.timeIntervalSince(seen) >= 1 {
+                        self.advertisementLastSeen[id] = .now
+                    }
+                } else {
+                    self.advertisementLastSeen[id] = .now
+                }
                 // Record manufacturer data when present — lets tests verify a
                 // board has flipped into iBeacon mode by inspecting the Apple
                 // company-ID payload broadcast on air.
-                if let mfg = result.manufacturerData {
+                if let mfg = result.manufacturerData,
+                   self.advertisementManufacturerData[id] != mfg {
                     self.advertisementManufacturerData[id] = mfg
                     // Boards configured to broadcast their MAC (company
                     // 0x626D) identify themselves here without a connection.
