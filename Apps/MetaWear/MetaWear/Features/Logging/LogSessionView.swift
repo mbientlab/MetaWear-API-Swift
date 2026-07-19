@@ -11,6 +11,10 @@ struct LogSessionView: View {
     @State private var availableTempChannels: [TempChannel] = []
     @State private var showDownload = false
     @State private var showForeignDiscardConfirm = false
+    /// Set when the user taps Download on the foreign-session card — pushes
+    /// the standard Download screen in foreign mode (`navigationDestination
+    /// (item:)` below) so the flow gets the usual progress + export UI.
+    @State private var foreignDownloadTarget: OrphanLogState?
 
     /// Foreign-session state for the active board, if any. Kept fresh by
     /// the `.task` below (re-detects on every appearance — the connect-time
@@ -36,8 +40,7 @@ struct LogSessionView: View {
             if let foreign = foreignState {
                 ForeignLogSection(
                     state: foreign,
-                    phase: appStore.orphanDownloadPhase,
-                    onDownload: { Task { await appStore.downloadOrphanLog(foreign) } },
+                    onDownload: { foreignDownloadTarget = foreign },
                     onDiscard: { showForeignDiscardConfirm = true }
                 )
             } else {
@@ -121,6 +124,9 @@ struct LogSessionView: View {
         }
         .navigationDestination(isPresented: $showDownload) {
             DownloadView()
+        }
+        .navigationDestination(item: $foreignDownloadTarget) { state in
+            DownloadView(foreign: state)
         }
         .alert("Discard the data on this board?",
                isPresented: $showForeignDiscardConfirm,
@@ -228,14 +234,8 @@ struct LogSessionView: View {
 /// reconstructed from on-board metadata).
 private struct ForeignLogSection: View {
     let state: OrphanLogState
-    let phase: OrphanDownloadPhase
     let onDownload: () -> Void
     let onDiscard: () -> Void
-
-    private var isDownloading: Bool {
-        if case .downloading = phase { return true }
-        return false
-    }
 
     var body: some View {
         Section {
@@ -254,32 +254,22 @@ private struct ForeignLogSection: View {
                       ? "record.circle" : "tray.full")
                     .foregroundStyle(Palette.accent)
             }
-            if case .downloading(let progress) = phase {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Downloading…")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    ProgressView(value: progress)
-                }
-            } else {
-                Button {
-                    onDownload()
-                } label: {
-                    Label(state.isActivelyLogging ? "Stop & Download" : "Download",
-                          systemImage: "square.and.arrow.down")
-                }
-                Button(role: .destructive) {
-                    onDiscard()
-                } label: {
-                    Label("Discard", systemImage: "trash")
-                }
+            Button {
+                onDownload()
+            } label: {
+                Label(state.isActivelyLogging ? "Stop & Download" : "Download",
+                      systemImage: "square.and.arrow.down")
+            }
+            Button(role: .destructive) {
+                onDiscard()
+            } label: {
+                Label("Discard", systemImage: "trash")
             }
         } header: {
             Text("Session From Another Device")
         } footer: {
             Text("Downloading saves the recording to Session History\(state.isActivelyLogging ? " and stops the logging" : ""). Sensor types are reconstructed from the board's own logger metadata. Starting a new log is available once this is resolved.")
         }
-        .disabled(isDownloading)
     }
 
     private var subtitle: String {
