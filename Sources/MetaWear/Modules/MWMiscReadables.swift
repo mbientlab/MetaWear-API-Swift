@@ -23,6 +23,34 @@ import Foundation
 // Request:  `[0x0B, 0x85]`        (register 0x05 | READ)
 // Response: `[0x0B, 0x85, n0, n1, n2, n3]` — UInt32 LE entry count at offset 2.
 
+/// One-shot read of whether on-board logging is currently ENABLED — i.e.
+/// the board is actively recording (Logging register `0x01` is RW).
+///
+/// Distinct from `MWLogLength`: an actively-logging MMS whose first flash
+/// page is still buffering in RAM reads `LOG_LENGTH == 0`, so entry count
+/// alone cannot detect a running session — this can.
+///
+/// Request:  `[0x0B, 0x81]`        (register 0x01 | READ)
+/// Response: `[0x0B, 0x81, on]` — 1 = logging, 0 = stopped.
+public struct MWLoggingEnabled: MWReadable {
+    public typealias Sample = Bool
+
+    public init() {}
+
+    public let module: MWModule = .logging
+    public let dataRegister: UInt8 = 0x01
+    public let packedDataRegister: UInt8? = nil
+
+    public var readCommand: Data { MWPacket.read(.logging, 0x01) }
+
+    public func parseSample(from packet: Data) throws -> Bool {
+        guard packet.count >= 3 else {
+            throw MWError.operationFailed("Logging-enabled packet too short: \(packet.count) bytes")
+        }
+        return packet[packet.startIndex + 2] != 0
+    }
+}
+
 /// One-shot read of the on-device log entry count.
 public struct MWLogLength: MWReadable {
     public typealias Sample = UInt32

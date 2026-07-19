@@ -47,12 +47,12 @@ final class AppStore {
     /// discard the data; cleared by `dismissOrphanLog` or `discardOrphanLog`.
     var orphanLogState: OrphanLogState?
 
-    /// Progress of an in-flight orphan-log download (triggered from the
-    /// orphan-log alert's "Download" button). Anonymous-logger flow: the
-    /// SDK reconstructs the signals from on-board metadata via
-    /// `createAnonymousDataSignals()` and decodes the entries without ever
-    /// having seen an `MWLoggable` for them.
-    var orphanDownloadPhase: OrphanDownloadPhase = .idle
+    /// Boards holding foreign log data, keyed by peripheral UUID. Unlike
+    /// the one-shot connect alert (`orphanLogState`), this SURVIVES the
+    /// alert's dismissal so the Log Session screen can offer Stop &
+    /// Download at any time — "Keep" is no longer a dead end. Cleared by
+    /// download/discard, or when a local record claims the board.
+    private(set) var foreignLogs: [UUID: OrphanLogState] = [:]
 
     init(containers: AppContainers) {
         self.containers = containers
@@ -159,50 +159,123 @@ final class AppStore {
     /// more — that used to be a blanket clean-up after our own crashes,
     /// but it also wiped legitimate state belonging to other apps.
     private func cleanUpOrphanResources(on device: MetaWearDevice) async {
-        let id = device.identifier
-        let anyPendingForDevice = pendingLogSessions.contains { $0.deviceID == id }
+        if let state = await evaluateForeignLog(on: device, surfaceAlert: true) {
+            orphanLogState = state
+        }
+    }
 
-        // If our local store knows about a session on this device, the
-        // board's state is ours — leave it alone; Download/Stop in the
-        // app's own UI handles teardown.
-        if anyPendingForDevice { return }
+    /// Re-evaluate a board's foreign-log status on demand — the Log
+    /// Session screen calls this on appear so the download path stays
+    /// discoverable after the connect-time alert was dismissed (or when
+    /// logging started elsewhere AFTER this phone connected).
+    func refreshForeignLogState(for device: MetaWearDevice) async {
+        _ = await evaluateForeignLog(on: device, surfaceAlert: false)
+    }
+
+    /// Shared detection: reads the board's logging state, applies the pure
+    /// decision table, updates `foreignLogs`, and performs the silent
+    /// cleanup of provably-garbage entries. Returns a state when the
+    /// caller should raise the connect-time alert.
+    private func evaluateForeignLog(
+        on device: MetaWearDevice, surfaceAlert: Bool
+    ) async -> OrphanLogState? {
+        let id = device.identifier
+        let hasLocalPending = pendingLogSessions.contains { $0.deviceID == id }
 
         let entryCount: UInt32
         do {
             entryCount = try await device.read(MWLogLength()).value
         } catch {
-            lastError = AppError(error: error)
-            return
+            // A cancelled refresh (the Logging screen's `.task` dies when
+            // the user navigates away — e.g. straight into the download)
+            // is routine, not an error worth a global alert. Cancellation
+            // can surface as CancellationError OR as a read timeout, so
+            // check the task flag too.
+            if !(error is CancellationError), !Task.isCancelled {
+                lastError = AppError(error: error)
+            }
+            return nil
         }
-        guard entryCount > 0 else { return }
+        // The enabled read catches a session in progress even when the
+        // entry count is 0 (MMS buffers the first flash page in RAM).
+        let loggingEnabled = (try? await device.read(MWLoggingEnabled()).value) ?? false
+        let activeLoggers = try? await device.queryActiveLoggers()
 
-        let activeLoggers: [ActiveLogger]
-        do {
-            activeLoggers = try await device.queryActiveLoggers()
-        } catch {
-            // Enumeration failed, so we cannot prove the entries are
-            // undecodable garbage. Keep the on-board data and surface the
-            // orphan flow instead of clearing recoverable logs.
-            orphanLogState = OrphanLogState(entryCount: entryCount, deviceID: id)
-            return
-        }
-        if activeLoggers.isEmpty {
-            // Entries with no logger subscriptions are guaranteed
-            // garbage — there's no decoder anywhere that could turn
-            // them into samples. Drop them so we don't re-alert on
-            // every reconnect.
+        // Never ACT on a cancelled evaluation: a logger enumeration cut
+        // short by cancellation reads as "no loggers", which the decision
+        // table below would treat as clearable garbage — and clearLog here
+        // could run concurrently with the very download the user just
+        // navigated to, wiping the board mid-drain.
+        guard !Task.isCancelled else { return nil }
+
+        let decision = Self.foreignLogDecision(
+            entryCount: entryCount,
+            hasActiveLoggers: activeLoggers.map { !$0.isEmpty },
+            isLoggingEnabled: loggingEnabled,
+            hasLocalPendingRecord: hasLocalPending
+        )
+        switch decision {
+        case .surface(let isActive):
+            let state = OrphanLogState(
+                entryCount: entryCount, deviceID: id, isActivelyLogging: isActive
+            )
+            foreignLogs[id] = state
+            return surfaceAlert ? state : nil
+        case .silentClear:
+            // Entries with no logger subscriptions are guaranteed garbage —
+            // no decoder anywhere could turn them into samples. Drop them so
+            // we don't re-alert on every reconnect.
             do {
                 try await device.clearLog()
             } catch {
                 lastError = AppError(error: error)
             }
-            return
+            foreignLogs[id] = nil
+            return nil
+        case .leaveAlone:
+            foreignLogs[id] = nil
+            return nil
         }
+    }
 
-        // Real entries + real loggers, but no matching local record →
-        // the data belongs to someone else (different phone, previous
-        // install, third-party app). Surface to the user.
-        orphanLogState = OrphanLogState(entryCount: entryCount, deviceID: id)
+    enum ForeignLogDecision: Equatable {
+        /// Recoverable foreign data (or a session in progress) — show it.
+        case surface(isActivelyLogging: Bool)
+        /// Entries with no loggers: undecodable garbage, clear silently.
+        case silentClear
+        /// Nothing foreign here (or it's this phone's own session).
+        case leaveAlone
+    }
+
+    /// Pure decision table for foreign-log detection, unit-tested.
+    ///
+    /// - Parameters:
+    ///   - hasActiveLoggers: `nil` when enumeration failed — we then can't
+    ///     prove entries are garbage, so anything suggesting data surfaces.
+    static func foreignLogDecision(
+        entryCount: UInt32,
+        hasActiveLoggers: Bool?,
+        isLoggingEnabled: Bool,
+        hasLocalPendingRecord: Bool
+    ) -> ForeignLogDecision {
+        // A local record means the board's state is ours; the app's own
+        // Download/Stop UI handles teardown.
+        if hasLocalPendingRecord { return .leaveAlone }
+        switch hasActiveLoggers {
+        case .some(true):
+            if entryCount > 0 || isLoggingEnabled {
+                return .surface(isActivelyLogging: isLoggingEnabled)
+            }
+            // Armed loggers, no entries, not sampling: configured but never
+            // started. Nothing recoverable; leave the wiring alone.
+            return .leaveAlone
+        case .some(false):
+            return entryCount > 0 ? .silentClear : .leaveAlone
+        case .none:
+            return (entryCount > 0 || isLoggingEnabled)
+                ? .surface(isActivelyLogging: isLoggingEnabled)
+                : .leaveAlone
+        }
     }
 
     /// Wipe the orphan log entries the user was just told about. Called
@@ -221,160 +294,28 @@ final class AppStore {
         do {
             try await device.clearLog()
             orphanLogState = nil
+            foreignLogs[state.deviceID] = nil
         } catch {
             orphanLogState = state
             lastError = AppError(error: error)
         }
     }
 
-    /// Dismiss the orphan-log alert without touching the board. Subsequent
-    /// `startLogging` will clear the stale loggers as part of its setup.
+    /// Dismiss the orphan-log ALERT without touching the board. Not a dead
+    /// end: the persistent `foreignLogs` entry keeps the Stop & Download
+    /// path available on the Log Session screen.
     func dismissOrphanLog() {
         orphanLogState = nil
     }
 
-    /// Download the orphan log data via the anonymous-logger SDK path,
-    /// persist each reconstructed signal as its own `MWSessionRecord` with
-    /// an "Unknown · …" label, then wipe the board. Used when the user
-    /// taps "Download" on the orphan-log alert — the loggers were set up
-    /// by a different app / install / phone, so we don't have any
-    /// `MWLoggable` for them, but the board still holds the wiring needed
-    /// to decode the data.
-    ///
-    /// Same captured-state pattern as `discardOrphanLog(_:)`: SwiftUI nils
-    /// `orphanLogState` synchronously on tap, so the alert's button
-    /// closure passes in the state it captured from `presenting:`.
-    func downloadOrphanLog(_ state: OrphanLogState) async {
-        guard let device = activeDevice, device.identifier == state.deviceID else {
+    /// Drop the persistent foreign-log entry for a board once its data has
+    /// been downloaded (the Download screen calls this on success — the
+    /// download itself runs in `DownloadViewModel.downloadForeign`, same
+    /// screen and progress UI as a normal download).
+    func clearForeignLog(for deviceID: UUID) {
+        foreignLogs[deviceID] = nil
+        if orphanLogState?.deviceID == deviceID {
             orphanLogState = nil
-            return
-        }
-        orphanLogState = nil
-        orphanDownloadPhase = .downloading(progress: 0)
-
-        do {
-            let signals = try await device.createAnonymousDataSignals()
-            guard !signals.isEmpty else {
-                // The board reported `LOG_LENGTH > 0` but no recoverable
-                // logger metadata — typically a corrupt slot or a logger
-                // type we don't decode yet. Clear so we don't keep re-
-                // alerting on every reconnect.
-                try await device.clearLog()
-                orphanDownloadPhase = .completed(savedCount: 0)
-                return
-            }
-
-            // Single raw drain; we'll decode per signal afterwards. The
-            // orphan flow only surfaces a 0…1 progress (no count UI yet),
-            // so we forward `percentComplete` straight through.
-            var allEntries: [RawLogEntry] = []
-            let stream = try await device.downloadLogs()
-            for try await chunk in stream {
-                orphanDownloadPhase = .downloading(progress: chunk.percentComplete)
-                allEntries = chunk.data
-            }
-
-            guard let info = await device.deviceInfo else {
-                throw MWError.invalidState("Device info unavailable")
-            }
-
-            var savedCount = 0
-            for signal in signals {
-                let typedSamples = try await device.decodeEntries(allEntries, for: signal)
-                if try await save(orphanSignal: signal, samples: typedSamples,
-                                  device: device, info: info) {
-                    savedCount += 1
-                }
-            }
-
-            try await device.clearLog()
-            orphanDownloadPhase = .completed(savedCount: savedCount)
-        } catch {
-            orphanDownloadPhase = .failed(message: error.localizedDescription)
-            lastError = AppError(error: error)
-        }
-    }
-
-    /// Dismiss the post-download completion banner.
-    func clearOrphanDownloadPhase() {
-        orphanDownloadPhase = .idle
-    }
-
-    /// Persist one anonymous signal's samples as a session. Returns true
-    /// when at least one sample was actually saved (empty signals are a
-    /// no-op — no harm, no foul). Dispatches on the first sample's case
-    /// to pick the matching `MWPersistable` type. Fuser signals (two
-    /// outputs per entry) only persist the first output for now; rare
-    /// enough that we can revisit if a user actually exercises it.
-    private func save(
-        orphanSignal signal: MWAnonymousSignal,
-        samples: [MWLoggedSample<[MWAnonymousSignal.Output]>],
-        device: MetaWearDevice,
-        info: MWDeviceInformation
-    ) async throws -> Bool {
-        let label = "Unknown · \(signal.identifier)"
-        guard let firstOutput = samples.first?.value.first else { return false }
-
-        switch firstOutput {
-        case .cartesian:
-            let mapped: [MWLoggedSample<CartesianFloat>] = samples.compactMap {
-                guard case .cartesian(let v) = $0.value.first else { return nil }
-                return MWLoggedSample(date: $0.date, tickMs: $0.tickMs, value: v)
-            }
-            guard !mapped.isEmpty else { return false }
-            _ = try await persistence.saveSession(
-                deviceID: device.identifier, deviceInfo: info,
-                sensorKind: CartesianFloat.persistenceKind,
-                samples: mapped, label: label)
-            return true
-
-        case .scalar:
-            let mapped: [MWLoggedSample<Float>] = samples.compactMap {
-                guard case .scalar(let v) = $0.value.first else { return nil }
-                return MWLoggedSample(date: $0.date, tickMs: $0.tickMs, value: v)
-            }
-            guard !mapped.isEmpty else { return false }
-            _ = try await persistence.saveSession(
-                deviceID: device.identifier, deviceInfo: info,
-                sensorKind: Float.persistenceKind,
-                samples: mapped, label: label)
-            return true
-
-        case .quaternion:
-            let mapped: [MWLoggedSample<Quaternion>] = samples.compactMap {
-                guard case .quaternion(let v) = $0.value.first else { return nil }
-                return MWLoggedSample(date: $0.date, tickMs: $0.tickMs, value: v)
-            }
-            guard !mapped.isEmpty else { return false }
-            _ = try await persistence.saveSession(
-                deviceID: device.identifier, deviceInfo: info,
-                sensorKind: Quaternion.persistenceKind,
-                samples: mapped, label: label)
-            return true
-
-        case .euler:
-            let mapped: [MWLoggedSample<EulerAngles>] = samples.compactMap {
-                guard case .euler(let v) = $0.value.first else { return nil }
-                return MWLoggedSample(date: $0.date, tickMs: $0.tickMs, value: v)
-            }
-            guard !mapped.isEmpty else { return false }
-            _ = try await persistence.saveSession(
-                deviceID: device.identifier, deviceInfo: info,
-                sensorKind: EulerAngles.persistenceKind,
-                samples: mapped, label: label)
-            return true
-
-        case .correctedCartesian:
-            let mapped: [MWLoggedSample<CorrectedCartesianFloat>] = samples.compactMap {
-                guard case .correctedCartesian(let v) = $0.value.first else { return nil }
-                return MWLoggedSample(date: $0.date, tickMs: $0.tickMs, value: v)
-            }
-            guard !mapped.isEmpty else { return false }
-            _ = try await persistence.saveSession(
-                deviceID: device.identifier, deviceInfo: info,
-                sensorKind: CorrectedCartesianFloat.persistenceKind,
-                samples: mapped, label: label)
-            return true
         }
     }
 
@@ -391,6 +332,13 @@ final class AppStore {
         // Ignore stale callbacks from a device we've since moved away from.
         guard activeDeviceID == deviceID else { return }
         stopRSSIPolling()
+        // Drop the connect-time foreign-log alert with the link — its
+        // Download/Discard actions target a board we can no longer reach.
+        // The persistent `foreignLogs` entry survives, so the path stays
+        // discoverable from the Logging screen after a reconnect.
+        if orphanLogState?.deviceID == deviceID {
+            orphanLogState = nil
+        }
         connectionState = .disconnected
         activeDevice = nil
         activeDeviceID = nil
@@ -753,29 +701,16 @@ struct AppError: Identifiable, Sendable {
     }
 }
 
-/// Reported when a freshly connected board has on-flash log entries that
-/// no local record claims — the SDK reads `LOG_LENGTH` after connect, and
-/// any non-zero count without a matching pending session lands here.
-struct OrphanLogState: Identifiable, Sendable {
+/// Reported when a connected board holds (or is actively recording) log
+/// data that no local record claims — a session started on another phone,
+/// a previous install, or a third-party app.
+struct OrphanLogState: Identifiable, Hashable, Sendable {
     let id = UUID()
     let entryCount: UInt32
     let deviceID: UUID
-}
-
-/// Lifecycle of an orphan-log download. Drives the modal overlay shown in
-/// `RootView` while the anonymous-logger pipeline reconstructs + persists
-/// foreign-session data.
-enum OrphanDownloadPhase: Equatable, Sendable {
-    case idle
-    case downloading(progress: Double)
-    case completed(savedCount: Int)
-    case failed(message: String)
-
-    /// True for the two terminal cases — drives the result alert binding.
-    var isTerminal: Bool {
-        switch self {
-        case .completed, .failed: return true
-        default:                  return false
-        }
-    }
+    /// True when the board's logging is currently ENABLED — a session in
+    /// progress, not just leftover data. Drives the user-facing copy and
+    /// catches the MMS case where `LOG_LENGTH` reads 0 because the first
+    /// flash page is still buffering in RAM.
+    let isActivelyLogging: Bool
 }

@@ -54,8 +54,14 @@ struct RootView: View {
         // device header (which now switches to a red "Logging" label
         // whenever a session is `.running`). Single source of truth, less
         // chrome.
-        .modifier(ErrorAndOrphanAlerts(appStore: appStore))
+        .modifier(ErrorAndOrphanAlerts(
+            appStore: appStore, detailPath: $path, preferredColumn: $preferredColumn
+        ))
         .onChange(of: appStore.activeDeviceID) { _, newID in
+            // Every pane on the detail stack is per-device — a stale entry
+            // (e.g. a foreignDownload pushed for the previous board) must
+            // not resolve against the next one.
+            path = NavigationPath()
             preferredColumn = newID == nil ? .sidebar : .detail
         }
         .overlay {
@@ -88,6 +94,14 @@ struct RootView: View {
 /// budget (chaining the two `.alert` modifiers inline blew the timeout).
 private struct ErrorAndOrphanAlerts: ViewModifier {
     let appStore: AppStore
+    /// Detail-column navigation path — the orphan alert's Download button
+    /// pushes the standard Download screen (which runs the foreign-session
+    /// download with the usual progress + export UI) instead of kicking
+    /// off an invisible background task.
+    @Binding var detailPath: NavigationPath
+    /// On compact width the push is invisible unless the detail column is
+    /// frontmost — Download forces it forward before appending.
+    @Binding var preferredColumn: NavigationSplitViewColumn
 
     func body(content: Content) -> some View {
         content
@@ -114,60 +128,30 @@ private struct ErrorAndOrphanAlerts: ViewModifier {
                 presenting: appStore.orphanLogState
             ) { state in
                 // Each button captures `state` (which SwiftUI hands the
-                // closure from `presenting:`) and passes it through to
-                // the AppStore method. SwiftUI fires the `isPresented`
-                // setter on tap, which nils `orphanLogState` *before*
-                // the Task here runs — without the capture the methods
-                // would see a nil state and silently no-op.
+                // closure from `presenting:`) and passes it through.
+                // SwiftUI fires the `isPresented` setter on tap, which
+                // nils `orphanLogState` *before* the button body runs —
+                // without the capture the actions would see a nil state
+                // and silently no-op.
                 //
                 // Declaration order = top-to-bottom in the alert;
                 // Download leads because it's the non-destructive
                 // recovery path.
                 Button("Download") {
-                    Task { await appStore.downloadOrphanLog(state) }
+                    preferredColumn = .detail
+                    detailPath.append(DeviceFeaturePane.foreignDownload(state))
                 }
-                Button("Keep", role: .cancel) { appStore.dismissOrphanLog() }
+                Button("Not Now", role: .cancel) { appStore.dismissOrphanLog() }
                 Button("Discard", role: .destructive) {
                     Task { await appStore.discardOrphanLog(state) }
                 }
             } message: { state in
-                Text("This device has \(state.entryCount) log entries from a previous session. Download them (parsed via the anonymous-logger flow), keep them on the board, or discard?")
+                if state.isActivelyLogging {
+                    Text("This board is logging a session started on another device\(state.entryCount > 0 ? " (\(state.entryCount) entries so far)" : ""). Download stops the logging and saves the data. You can also do this later from the Logging screen.")
+                } else {
+                    Text("This board holds \(state.entryCount) log entries from a session this phone doesn't know about. Download them, or handle it later from the Logging screen.")
+                }
             }
-            // Result-of-orphan-download alert — only shown for the two
-            // terminal phases. Tapping OK resets the phase back to .idle.
-            .alert(
-                orphanResultTitle,
-                isPresented: Binding(
-                    get: { appStore.orphanDownloadPhase.isTerminal },
-                    set: { if !$0 { appStore.clearOrphanDownloadPhase() } }
-                )
-            ) {
-                Button("OK", role: .cancel) { appStore.clearOrphanDownloadPhase() }
-            } message: {
-                Text(orphanResultMessage)
-            }
-    }
-
-    private var orphanResultTitle: String {
-        switch appStore.orphanDownloadPhase {
-        case .completed: return "Download complete"
-        case .failed:    return "Download failed"
-        default:         return ""
-        }
-    }
-
-    private var orphanResultMessage: String {
-        switch appStore.orphanDownloadPhase {
-        case .completed(let savedCount):
-            if savedCount == 0 {
-                return "No decodable signals were recovered. The board's log buffer has been cleared."
-            }
-            return "Saved \(savedCount) session\(savedCount == 1 ? "" : "s") under \"Unknown · …\". Open Session History to view or export them."
-        case .failed(let message):
-            return message
-        default:
-            return ""
-        }
     }
 }
 
@@ -176,6 +160,9 @@ enum DeviceFeaturePane: Hashable {
     case liveStream([SensorSelection])
     case logSession
     case download
+    /// The Download screen in foreign-session mode: drains a board whose
+    /// logging was started on another device via the anonymous-logger path.
+    case foreignDownload(OrphanLogState)
     case sessionHistory
     case controls
     case deviceInfo
@@ -184,14 +171,15 @@ enum DeviceFeaturePane: Hashable {
     @ViewBuilder
     func destination() -> some View {
         switch self {
-        case .sensorConfig:           SensorConfigView()
-        case .liveStream(let sels):   LiveStreamView(selections: sels)
-        case .logSession:             LogSessionView()
-        case .download:               DownloadView()
-        case .sessionHistory:         SessionHistoryView()
-        case .controls:               ControlsView()
-        case .deviceInfo:             DeviceInfoView()
-        case .settings:               DeviceSettingsView()
+        case .sensorConfig:              SensorConfigView()
+        case .liveStream(let sels):      LiveStreamView(selections: sels)
+        case .logSession:                LogSessionView()
+        case .download:                  DownloadView()
+        case .foreignDownload(let s):    DownloadView(foreign: s)
+        case .sessionHistory:            SessionHistoryView()
+        case .controls:                  ControlsView()
+        case .deviceInfo:                DeviceInfoView()
+        case .settings:                  DeviceSettingsView()
         }
     }
 }

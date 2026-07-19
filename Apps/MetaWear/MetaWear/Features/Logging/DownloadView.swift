@@ -3,6 +3,11 @@ import MetaWear
 import MetaWearPersistence
 
 struct DownloadView: View {
+    /// When set, this screen downloads a FOREIGN session (started on another
+    /// phone / install / app) via the anonymous-logger path instead of the
+    /// pending local records. Same progress + export UI either way.
+    var foreign: OrphanLogState? = nil
+
     @Environment(AppStore.self) private var appStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var viewModel: DownloadViewModel?
@@ -12,13 +17,32 @@ struct DownloadView: View {
     @State private var exportItems: [UUID: URL] = [:]
     @State private var exportFailures: Set<UUID> = []
     @State private var exportError: AppError?
+    /// Set when the screen was reached without a usable device — no active
+    /// connection, or a foreign-session push whose board is no longer the
+    /// active device. Renders a clear dead-end instead of an eternal spinner.
+    @State private var deviceUnavailable = false
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
+
+    /// A MetaWear readout is destructive and non-resumable — the board's
+    /// readout pointer advances even for entries the phone never received.
+    /// Lock back navigation (button + interactive pop) while draining so a
+    /// stray swipe can't cancel the `.task` mid-readout and strand the data.
+    private var isDownloading: Bool {
+        if case .downloading = viewModel?.phase { return true }
+        return false
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: isCompact ? 8 : 12) {
-                if let viewModel {
+                if deviceUnavailable {
+                    ContentUnavailableView(
+                        "Device not connected",
+                        systemImage: "antenna.radiowaves.left.and.right.slash",
+                        description: Text("Reconnect to the board, then retry the download.")
+                    )
+                } else if let viewModel {
                     switch viewModel.phase {
                     case .idle:
                         ContentUnavailableView("No download yet", systemImage: "arrow.down.circle")
@@ -40,8 +64,17 @@ struct DownloadView: View {
             .padding(.vertical, isCompact ? 8 : 16)
         }
         .navigationTitle("Download")
+        .navigationBarBackButtonHidden(isDownloading)
         .task {
-            guard let device = appStore.activeDevice else { return }
+            // The foreign push carries the board it was raised for — never
+            // drain a DIFFERENT board (a stale navigation entry resolved
+            // after switching devices would stop, drain, and wipe it).
+            guard let device = appStore.activeDevice,
+                  foreign == nil || foreign?.deviceID == device.identifier else {
+                deviceUnavailable = true
+                return
+            }
+            deviceUnavailable = false
             if viewModel == nil {
                 viewModel = DownloadViewModel(
                     device: device,
@@ -49,12 +82,27 @@ struct DownloadView: View {
                     containers: appStore.containers
                 )
             }
-            let records = appStore.pendingLogSessions.filter { $0.deviceID == device.identifier }
-            await viewModel?.downloadAll(records: records)
-            // Sessions are now `.downloaded` — drop them from the global
-            // pending list so the StatePill (and remembered-device row
-            // "logging waiting" indicator) disappear.
-            appStore.refreshPendingLogSessions()
+            // `.task` can re-fire on re-insertion (split-view column
+            // changes). A readout drains the board exactly once — kicking
+            // a second download off the same view model would wipe the
+            // completed UI and re-clear the board. Only start from idle.
+            guard case .idle = viewModel?.phase ?? .idle else { return }
+            if let foreign {
+                await viewModel?.downloadForeign(foreign)
+                // The board is drained + cleared — drop the persistent
+                // foreign-log entry so the Logging screen goes back to the
+                // normal sensor picker (and no re-alert on reconnect).
+                if case .ready = viewModel?.phase {
+                    appStore.clearForeignLog(for: foreign.deviceID)
+                }
+            } else {
+                let records = appStore.pendingLogSessions.filter { $0.deviceID == device.identifier }
+                await viewModel?.downloadAll(records: records)
+                // Sessions are now `.downloaded` — drop them from the global
+                // pending list so the StatePill (and remembered-device row
+                // "logging waiting" indicator) disappear.
+                appStore.refreshPendingLogSessions()
+            }
             // Build the CSV temp files up front so each row in the ready
             // view can hand a ShareLink a finished URL — avoids a second
             // tap on an Export CSV button to materialise them.
