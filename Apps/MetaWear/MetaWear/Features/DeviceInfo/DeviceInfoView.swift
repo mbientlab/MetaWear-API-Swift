@@ -17,9 +17,15 @@ struct DeviceInfoView: View {
                     if let mac = viewModel.macAddress {
                         LabeledContent("MAC", value: mac).font(.body.monospaced())
                     }
-                    LabeledContent("Battery") {
-                        BatteryPill(battery: viewModel.battery)
-                    }
+                    // Plain value rows, deliberately matching the anatomy of
+                    // the text rows above so every row in the section has
+                    // identical height and separation. (The richer
+                    // BatteryPill / RSSIPill treatments live in the device
+                    // header card, where they belong.)
+                    LabeledContent("Battery",
+                                   value: viewModel.battery.map { "\($0.charge)%" } ?? "—")
+                    LabeledContent("Signal",
+                                   value: appStore.connectedRSSI.map { "\($0) dBm" } ?? "—")
                 }
 
                 // List every module the SDK knows about. Present modules

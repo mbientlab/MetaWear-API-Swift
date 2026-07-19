@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import MetaWear
+import os
 
 /// Presentation model for the connected-device overview.
 ///
@@ -68,11 +69,47 @@ final class DeviceViewModel {
         }
     }
 
-    func rename(to newName: String) async {
+    /// - Returns: `true` on success, so callers can navigate to where the
+    ///   new name is visible; `false` leaves the user in place with the
+    ///   error surfaced via `lastError`.
+    @discardableResult
+    func rename(to newName: String) async -> Bool {
         do {
             try await device.send(MWSettings.SetDeviceName(validating: newName))
+            // Make the rename VISIBLE immediately. Every displayed name comes
+            // from the scanner's advertised-name cache, and a connected board
+            // doesn't advertise — without these, nothing on screen changes
+            // until a disconnect + rescan + reconnect cycle.
+            appStore.scanner.noteAdvertisedName(newName, for: device.identifier)
+            appStore.renameRememberedDevice(
+                peripheralUUID: device.identifier, mac: macAddress, to: newName
+            )
+            await refreshMACBroadcastAfterRename(newName)
+            return true
         } catch {
             lastError = AppError(error: error)
+            return false
+        }
+    }
+
+    /// The MAC-broadcast scan response freezes its embedded name at
+    /// configuration time — keep it in sync after a rename on any board
+    /// that broadcasts its MAC. Gated on the host-local configured set OR
+    /// the observed advertisement: a board configured by the user's OTHER
+    /// device must be refreshed here too, or its scan response would keep
+    /// broadcasting the old name forever. Best-effort: a failure leaves the
+    /// old name on air until the next reconfiguration; it never blocks the
+    /// rename itself.
+    private func refreshMACBroadcastAfterRename(_ newName: String) async {
+        guard let mac = macAddress else { return }
+        let broadcastsMAC = appStore.macAdvertisementConfigured.contains(mac)
+            || appStore.scanner.advertisedMACs[device.identifier] != nil
+        guard broadcastsMAC else { return }
+        do {
+            try await device.updateMACAdvertisement(advertisedName: newName)
+            AppStore.log.info("Refreshed MAC broadcast name for \(mac, privacy: .public)")
+        } catch {
+            AppStore.log.error("MAC broadcast rename refresh failed for \(mac, privacy: .public): \(error, privacy: .public)")
         }
     }
 

@@ -103,9 +103,12 @@ public extension MetaWearDevice {
 
     /// Fetch the latest firmware from MbientLab's release catalog and flash
     /// it. If the device is already on the latest, the stream finishes with
-    /// no events.
+    /// no events — unless `forceReinstall` is set, which flashes the latest
+    /// build regardless (recovery path for a misbehaving board, or a clean
+    /// reflash after experimentation).
     nonisolated func updateFirmwareToLatest(
-        server: MWFirmwareServer = MWFirmwareServer()
+        server: MWFirmwareServer = MWFirmwareServer(),
+        forceReinstall: Bool = false
     ) -> AsyncThrowingStream<DFUProgress, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { [weak self] in
@@ -118,6 +121,7 @@ public extension MetaWearDevice {
                 do {
                     try await self._runUpdateToLatest(
                         server: server,
+                        forceReinstall: forceReinstall,
                         continuation: continuation
                     )
                     continuation.finish()
@@ -314,6 +318,7 @@ extension MetaWearDevice {
     /// the application), surfaced through `currentPart`/`totalParts`.
     fileprivate func _runUpdateToLatest(
         server: MWFirmwareServer,
+        forceReinstall: Bool,
         continuation: AsyncThrowingStream<DFUProgress, Error>.Continuation
     ) async throws {
         guard let info = self.deviceInfo else {
@@ -323,11 +328,20 @@ extension MetaWearDevice {
         }
 
         continuation.yield(DFUProgress(state: .fetchingCatalog))
-        guard let build = try await server.updateAvailable(
+        let build: MWFirmwareBuild
+        if forceReinstall {
+            // Flash the latest build even when the board already runs it.
+            build = try await server.latestBuild(
+                hardwareRev: info.hardwareRevision,
+                modelNumber: info.modelNumber
+            )
+        } else if let update = try await server.updateAvailable(
             currentRev: info.firmwareRevision,
             hardwareRev: info.hardwareRevision,
             modelNumber: info.modelNumber
-        ) else {
+        ) {
+            build = update
+        } else {
             // Already up to date. Finish with no events; caller can
             // distinguish "nothing to do" from "update completed" by
             // observing whether `.completed` was yielded.

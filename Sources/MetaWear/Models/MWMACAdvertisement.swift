@@ -127,4 +127,18 @@ public extension MetaWearDevice {
         try await send(command)
         return macro
     }
+
+    /// Re-issue the MAC broadcast with a new advertised name (e.g. after
+    /// `MWSettings.SetDeviceName`) **without stacking macros**.
+    ///
+    /// The Macro module offers no per-macro erase — only `ERASE_ALL` — so
+    /// this erases every stored macro before re-recording the broadcast
+    /// macro. This SDK treats the MAC broadcast as the board's sole macro
+    /// owner; if a caller records custom macros alongside it, they must be
+    /// re-recorded after calling this.
+    @discardableResult
+    func updateMACAdvertisement(advertisedName: String) async throws -> MWMacro {
+        try await eraseAllMacros()
+        return try await enableMACAdvertisement(advertisedName: advertisedName)
+    }
 }

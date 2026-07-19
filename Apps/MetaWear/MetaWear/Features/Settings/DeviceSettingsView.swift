@@ -5,6 +5,7 @@ import MetaWearFirmware
 
 struct DeviceSettingsView: View {
     @Environment(AppStore.self) private var appStore
+    @Environment(\.dismiss) private var dismiss
     @State private var viewModel: DeviceViewModel?
     @State private var firmware: FirmwareUpdateViewModel?
     @State private var draftName: String = ""
@@ -21,13 +22,24 @@ struct DeviceSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Rename") {
+            Section {
                 TextField("Device name", text: $draftName)
                     .textInputAutocapitalization(.never)
                 Button("Save", systemImage: "checkmark") {
-                    Task { await viewModel?.rename(to: draftName) }
+                    Task {
+                        // Pop back to the device page on success — the new
+                        // name in its header IS the confirmation. On failure
+                        // stay put; the lastError alert explains.
+                        if await viewModel?.rename(to: draftName) == true {
+                            dismiss()
+                        }
+                    }
                 }
-                .disabled(draftName.isEmpty)
+                .disabled(!MWSettings.isNameValid(draftName))
+            } header: {
+                Text("Rename")
+            } footer: {
+                Text("Up to \(MWSettings.maxDeviceNameLength) characters: letters, numbers, spaces, _ and -. The name updates in the app immediately and on the board's next advertisement.")
             }
 
             if let firmware {
@@ -83,9 +95,11 @@ struct DeviceSettingsView: View {
             }
             await refreshLogStats()
         }
-        .confirmationDialog("Factory reset this MetaWear?",
-                            isPresented: $showFactoryResetConfirm,
-                            titleVisibility: .visible) {
+        // Alerts, not confirmation dialogs, for every destructive confirm:
+        // dialogs anchor to the triggering control (a popover on iPad/Mac)
+        // and land in odd places — alerts center on screen everywhere.
+        .alert("Factory reset this MetaWear?",
+               isPresented: $showFactoryResetConfirm) {
             Button("Reset", role: .destructive) {
                 Task { await viewModel?.factoryReset() }
             }
@@ -93,9 +107,8 @@ struct DeviceSettingsView: View {
         } message: {
             Text("This will erase all on-device state. The board will reboot and disconnect.")
         }
-        .confirmationDialog("Clear all log data and loggers?",
-                            isPresented: $showClearLogsConfirm,
-                            titleVisibility: .visible) {
+        .alert("Clear all log data and loggers?",
+               isPresented: $showClearLogsConfirm) {
             Button("Clear", role: .destructive) {
                 Task { await clearLogs() }
             }
@@ -109,6 +122,16 @@ struct DeviceSettingsView: View {
         }
         .alert(item: $clearLogError) { err in
             Alert(title: Text("Clear logs failed"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
+        }
+        // Rename / factory-reset errors were previously swallowed — the
+        // view model recorded them but nothing here presented them.
+        .alert(item: Binding(
+            get: { viewModel?.lastError },
+            set: { viewModel?.lastError = $0 }
+        )) { err in
+            Alert(title: Text("Operation failed"),
                   message: Text(err.message),
                   dismissButton: .default(Text("OK")))
         }
@@ -161,6 +184,7 @@ struct DeviceSettingsView: View {
 private struct FirmwareSection: View {
     let viewModel: FirmwareUpdateViewModel
     @State private var showUpdateConfirm = false
+    @State private var showReinstallConfirm = false
 
     var body: some View {
         Section {
@@ -175,15 +199,25 @@ private struct FirmwareSection: View {
         } footer: {
             footer
         }
-        .confirmationDialog("Update firmware?",
-                            isPresented: $showUpdateConfirm,
-                            titleVisibility: .visible) {
+        // Alerts (centered) rather than anchored confirmation dialogs — see
+        // the note on the settings-screen confirms above.
+        .alert("Update firmware?",
+               isPresented: $showUpdateConfirm) {
             Button("Update") {
                 Task { await viewModel.startUpdate() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Keep MetaWear open with the board nearby and powered until the update finishes. The board restarts automatically when it's done.")
+        }
+        .alert("Reinstall current firmware?",
+               isPresented: $showReinstallConfirm) {
+            Button("Reinstall", role: .destructive) {
+                Task { await viewModel.startUpdate(forceReinstall: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Reflashes the latest firmware even though the board is already up to date. On-board logs, macros, and settings are erased. Keep MetaWear open with the board nearby and powered until it finishes.")
         }
     }
 
@@ -211,6 +245,11 @@ private struct FirmwareSection: View {
             }
             Button("Check Again", systemImage: "arrow.triangle.2.circlepath") {
                 Task { await viewModel.checkForUpdate() }
+            }
+            // Recovery path: reflash the current firmware on a board that's
+            // misbehaving despite being up to date.
+            Button("Reinstall Firmware", systemImage: "arrow.counterclockwise.circle") {
+                showReinstallConfirm = true
             }
 
         case .updateAvailable(let build):
