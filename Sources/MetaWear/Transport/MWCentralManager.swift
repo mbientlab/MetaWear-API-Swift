@@ -75,6 +75,18 @@ actor MWCentralManager: NSObject {
             throw MWError.operationFailed("Peripheral \(identifier) not found")
         }
         mwLog("[BLE] requestConnect: \(identifier)")
+        // Refuse to reroute a peripheral another live transport owns. The
+        // registration below is the ONLY routing for didConnect/didDisconnect
+        // — silently overwriting it would orphan the existing connection (its
+        // disconnect callback never delivered, its continuations hung). A
+        // same-transport re-register (connect retry) is fine.
+        if let existing = transports[peripheral.identifier], existing !== transport {
+            mwLog("[BLE] requestConnect: REFUSED \(identifier) — peripheral owned by another live transport")
+            pendingCancels.remove(identifier)
+            throw MWError.invalidState(
+                "Peripheral \(identifier) already has an active connection owned by another device instance"
+            )
+        }
         knownPeripherals[peripheral.identifier] = peripheral
         transports[peripheral.identifier] = transport
         central.connect(peripheral, options: nil)

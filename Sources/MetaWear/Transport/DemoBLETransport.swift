@@ -20,9 +20,49 @@ import Foundation
 public actor DemoBLETransport: BLETransport {
 
     /// Stable identifier so app-side code can recognise the demo device.
+    /// Equal to `Identity.board(0).identifier` — the legacy single demo board.
     public static let deviceIdentifier = UUID(uuidString: "DE300000-0000-4000-8000-DE300000DE30")!
 
-    public init() {}
+    /// Identity worn by one simulated board. Multiple demo boards differ in
+    /// identifier, serial, MAC, and waveform phase, so multi-board flows
+    /// (group logging, per-board attribution) are simulator-testable with a
+    /// fleet of distinguishable fakes.
+    public struct Identity: Sendable, Equatable {
+        public let identifier: UUID
+        public let serial: String
+        /// 6-byte address in wire order (LSB first) — served for Settings
+        /// register 0x0B reads.
+        public let macLSBFirst: [UInt8]
+        /// Seconds added to the waveform clock so each board's traces differ.
+        public let phaseOffset: Double
+
+        public init(identifier: UUID, serial: String, macLSBFirst: [UInt8], phaseOffset: Double) {
+            precondition(macLSBFirst.count == 6, "MAC must be 6 bytes")
+            self.identifier = identifier
+            self.serial = serial
+            self.macLSBFirst = macLSBFirst
+            self.phaseOffset = phaseOffset
+        }
+
+        /// Stable identity for demo board `index` (0...15). `board(0)` is
+        /// byte-for-byte the legacy single demo device (identifier
+        /// `deviceIdentifier`, serial "DEMO01", MAC …:E0:01).
+        public static func board(_ index: Int) -> Identity {
+            precondition((0...15).contains(index), "demo board index out of range")
+            return Identity(
+                identifier: UUID(uuidString: String(format: "DE300000-0000-4000-8000-DE300000DE3%X", index))!,
+                serial: String(format: "DEMO%02d", index + 1),
+                macLSBFirst: [0x01 &+ UInt8(index), 0xE0, 0x0D, 0x0E, 0x3D, 0xDE],
+                phaseOffset: Double(index) * 0.9
+            )
+        }
+    }
+
+    public let identity: Identity
+
+    public init(identity: Identity = .board(0)) {
+        self.identity = identity
+    }
 
     // MARK: - State
 
@@ -87,7 +127,7 @@ public actor DemoBLETransport: BLETransport {
         switch characteristic {
         case MWUUIDs.manufacturerName: return Data("MbientLab Inc".utf8)
         case MWUUIDs.modelNumber:      return Data("8".utf8)            // MetaMotion S
-        case MWUUIDs.serialNumber:     return Data("DEMO01".utf8)
+        case MWUUIDs.serialNumber:     return Data(identity.serial.utf8)
         case MWUUIDs.firmwareRevision: return Data("1.7.3".utf8)
         case MWUUIDs.hardwareRevision: return Data("0.4".utf8)
         default:                       return Data()
@@ -212,11 +252,16 @@ public actor DemoBLETransport: BLETransport {
         case (0x11, 0x0C):   // battery: 87 %, 4.08 V
             emit([0x11, register, 87, 0xF0, 0x0F])
         case (0x11, 0x0B):   // MAC (7-byte form: type 0x01 + LE address)
-            emit([0x11, register, 0x01, 0x01, 0xE0, 0x0D, 0x0E, 0x3D, 0xDE])
+            emit([0x11, register, 0x01] + identity.macLSBFirst)
         case (0x0B, 0x01):   // logging enabled? (foreign-session detection)
             emit([0x0B, register, loggingEnabled ? 1 : 0])
         case (0x0B, 0x04):   // logging time: tick + reset uid
-            let tick = UInt32(elapsed() * 1000.0 / 1.46484375)
+            // phaseOffset is a waveform-shape knob ONLY — the logging clock
+            // must stay wall-true, or each board's logReferenceDate skews by
+            // its offset and "simultaneous" demo logs land misaligned across
+            // the fleet (reads as a cross-board attribution bug in exactly
+            // the group-logging flows the fleet exists to validate).
+            let tick = UInt32((elapsed() - identity.phaseOffset) * 1000.0 / 1.46484375)
             emit([0x0B, register] + le32(tick) + [0x01])
         case (0x0B, 0x05):   // log length
             emit([0x0B, register] + le32(currentEntryCount()))
@@ -407,7 +452,9 @@ public actor DemoBLETransport: BLETransport {
 
     private func elapsed() -> Double {
         let parts = (ContinuousClock.now - epoch).components
-        return Double(parts.seconds) + Double(parts.attoseconds) * 1e-18
+        // The per-identity phase offset desynchronises the fleet's waveforms
+        // — three demo boards must not chart identical traces.
+        return Double(parts.seconds) + Double(parts.attoseconds) * 1e-18 + identity.phaseOffset
     }
 
     private func accelRaw(_ t: Double) -> (Int16, Int16, Int16) {

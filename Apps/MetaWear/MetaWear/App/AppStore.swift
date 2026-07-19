@@ -65,25 +65,28 @@ final class AppStore {
 
     // MARK: - Demo device
 
-    /// A fully simulated MetaWear (see `DemoBLETransport`). Created on first
-    /// access so non-demo sessions never pay for it. Reused across
-    /// connect/disconnect cycles like a real discovered device.
-    private var _demoDevice: MetaWearDevice?
-    var demoDevice: MetaWearDevice {
-        if let device = _demoDevice { return device }
-        let device = MetaWearDevice(
-            identifier: DemoBLETransport.deviceIdentifier,
-            transport: DemoBLETransport()
-        )
-        _demoDevice = device
-        return device
+    /// The fully simulated MetaWear fleet (see `DemoBLETransport.Identity`).
+    /// Created on first access so non-demo sessions never pay for it; each
+    /// board is a stable instance reused across connect/disconnect cycles
+    /// like a real discovered device.
+    private var _demoDevices: [MetaWearDevice]?
+    var demoDevices: [MetaWearDevice] {
+        if let devices = _demoDevices { return devices }
+        let devices = DemoMode.identities.map {
+            MetaWearDevice(identifier: $0.identifier, transport: DemoBLETransport(identity: $0))
+        }
+        _demoDevices = devices
+        return devices
     }
 
+    /// The primary demo board — kept for call sites that predate the fleet.
+    var demoDevice: MetaWearDevice { demoDevices[0] }
+
     /// Display name for the active device: advertised name when we have one,
-    /// the demo label for the simulated device, generic fallback otherwise.
+    /// the demo label for a simulated device, generic fallback otherwise.
     var activeDeviceName: String {
         guard let id = activeDeviceID else { return "Device" }
-        if id == DemoBLETransport.deviceIdentifier { return DemoMode.deviceName }
+        if let demoName = DemoMode.name(for: id) { return demoName }
         return scanner.advertisedNames[id] ?? "MetaWear"
     }
 
@@ -503,9 +506,10 @@ final class AppStore {
     }
 
     private func rememberDevice(_ device: MetaWearDevice) async {
-        // The simulated device never persists into Remembered — it would show
-        // up as a stale phantom row in non-demo sessions.
-        guard device.identifier != DemoBLETransport.deviceIdentifier else { return }
+        // Simulated devices never persist into Remembered — they would show
+        // up as stale phantom rows in non-demo sessions. Set membership, not
+        // board-0 equality: the whole demo fleet is excluded.
+        guard !DemoMode.isDemoID(device.identifier) else { return }
         let info = await device.deviceInfo
         let id = device.identifier
         // The MAC address is the only identity that survives across the

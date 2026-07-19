@@ -114,29 +114,33 @@ struct ScanView: View {
 
             if DemoMode.isEnabled {
                 Section(header: brandHeader("Demo")) {
-                    Button {
-                        Task { await connect(to: appStore.demoDevice) }
-                    } label: {
-                        HStack {
-                            Label {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(DemoMode.deviceName)
-                                        .foregroundStyle(.primary)
-                                    Text("Synthetic sensors — no hardware needed")
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
+                    // The whole simulated fleet — several boards so
+                    // multi-board flows are exercisable without hardware.
+                    ForEach(appStore.demoDevices, id: \.identifier) { demo in
+                        Button {
+                            Task { await connect(to: demo) }
+                        } label: {
+                            HStack {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(DemoMode.name(for: demo.identifier) ?? DemoMode.deviceName)
+                                            .foregroundStyle(.primary)
+                                        Text("Synthetic sensors — no hardware needed")
+                                            .font(.footnote)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                } icon: {
+                                    Image(systemName: "sparkles")
+                                        .foregroundStyle(Palette.accent)
                                 }
-                            } icon: {
-                                Image(systemName: "sparkles")
-                                    .foregroundStyle(Palette.accent)
-                            }
-                            Spacer()
-                            if appStore.connectingDeviceID == DemoBLETransport.deviceIdentifier {
-                                ProgressView()
+                                Spacer()
+                                if appStore.connectingDeviceID == demo.identifier {
+                                    ProgressView()
+                                }
                             }
                         }
+                        .accessibilityHint("Connects to a simulated MetaWear with synthetic sensor data")
                     }
-                    .accessibilityHint("Connects to a simulated MetaWear with synthetic sensor data")
                 }
             }
 
