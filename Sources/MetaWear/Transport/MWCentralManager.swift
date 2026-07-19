@@ -149,14 +149,15 @@ extension MWCentralManager: CBCentralManagerDelegate {
         rssi RSSI: NSNumber
     ) {
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name
-        let serviceUUIDs = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?.map { $0.uuidString }.joined(separator: ",") ?? "none"
+        let serviceUUIDs = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?.map { $0.uuidString } ?? []
         let mfgData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
-        mwLogVerbose("[BLE] didDiscover: \(peripheral.identifier) name=\(name ?? "nil") rssi=\(RSSI) services=[\(serviceUUIDs)] mfg=\(mfgData?.count ?? 0)B")
+        mwLogVerbose("[BLE] didDiscover: \(peripheral.identifier) name=\(name ?? "nil") rssi=\(RSSI) services=\(serviceUUIDs) mfg=\(mfgData?.count ?? 0)B")
         let result = ScanResult(
             identifier: peripheral.identifier,
             name: name,
             rssi: RSSI.intValue,
-            manufacturerData: mfgData
+            manufacturerData: mfgData,
+            serviceUUIDs: serviceUUIDs
         )
         Task {
             await self.cachePeripheral(peripheral)
