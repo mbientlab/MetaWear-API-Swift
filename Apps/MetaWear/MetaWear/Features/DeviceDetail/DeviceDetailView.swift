@@ -69,6 +69,11 @@ struct DeviceDetailView: View {
                     Text(vm.macAddress ?? "—")
                         .font(.title3.weight(.semibold).monospaced())
                     Spacer()
+                    // Live link quality sits beside the state pill — the
+                    // top row has the free width, unlike the pill row below.
+                    if let rssi = appStore.connectedRSSI {
+                        RSSIPill(dBm: rssi)
+                    }
                     StatePill(state: appStore.connectionState,
                               isLogging: isDeviceLogging)
                 }
