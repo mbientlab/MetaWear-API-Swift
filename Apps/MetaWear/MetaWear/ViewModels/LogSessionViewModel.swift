@@ -33,7 +33,10 @@ final class LogSessionViewModel {
         self.containers = containers
     }
 
-    func start(_ selections: [SensorSelection]) async {
+    /// - Parameter groupID: stamped onto every created record when this
+    ///   start is part of a group capture (several boards logging together)
+    ///   so the downloaded sessions can be batched back together.
+    func start(_ selections: [SensorSelection], groupID: UUID? = nil) async {
         guard case .idle = phase else {
             return
         }
@@ -43,7 +46,7 @@ final class LogSessionViewModel {
         var records: [LogSessionRecord] = []
         do {
             for selection in selections {
-                if let record = try await startOne(selection: selection, chip: chip, context: context) {
+                if let record = try await startOne(selection: selection, chip: chip, context: context, groupID: groupID) {
                     records.append(record)
                 }
             }
@@ -76,7 +79,8 @@ final class LogSessionViewModel {
     private func startOne(
         selection: SensorSelection,
         chip: MWSensorFusionChip,
-        context: ModelContext
+        context: ModelContext,
+        groupID: UUID? = nil
     ) async throws -> LogSessionRecord? {
         switch selection.id {
         case .temperature:
@@ -92,7 +96,8 @@ final class LogSessionViewModel {
                 configJSON: Self.encode(selection),
                 loggerKey: polled.loggerKey,
                 status: .running,
-                polledHandlesJSON: Self.encodeHandles(handles)
+                polledHandlesJSON: Self.encodeHandles(handles),
+                groupID: groupID
             )
             context.insert(record)
             return record
@@ -109,7 +114,8 @@ final class LogSessionViewModel {
                 configJSON: Self.encode(selection),
                 loggerKey: polled.loggerKey,
                 status: .running,
-                polledHandlesJSON: Self.encodeHandles(handles)
+                polledHandlesJSON: Self.encodeHandles(handles),
+                groupID: groupID
             )
             context.insert(record)
             return record
@@ -122,7 +128,8 @@ final class LogSessionViewModel {
                 sensorKind: selection.id.persistenceKey,
                 configJSON: Self.encode(selection),
                 loggerKey: loggable.loggerKey,
-                status: .running
+                status: .running,
+                groupID: groupID
             )
             context.insert(record)
             return record
@@ -144,7 +151,12 @@ final class LogSessionViewModel {
         //   - the captured data is still on the board for download.
         // If the board kept sampling, the next `cleanUpOrphanResources`
         // on connect will sweep any leftover state.
-        for record in activeRecords {
+        // `where` guard: a group collect pass can stop + download + clear
+        // this board while a solo Logging screen still holds these records
+        // in its view model (iPad split view). Re-stopping a `.downloaded`
+        // record would fire stop commands at logger slots clearLog already
+        // freed AND resurrect the record as pending everywhere.
+        for record in activeRecords where record.status != .downloaded {
             do {
                 try await stopOne(record: record, chip: chip)
             } catch {
