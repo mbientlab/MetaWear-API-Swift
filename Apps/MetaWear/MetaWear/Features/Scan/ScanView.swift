@@ -157,8 +157,7 @@ struct ScanView: View {
         // here too.)
         .scrollContentBackground(.hidden)
         .background {
-            Palette.accent
-                .ignoresSafeArea()
+            BrandScanBackground()
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
