@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import MetaWear
+import os
 
 /// Presentation model for the connected-device overview.
 ///
@@ -71,8 +72,24 @@ final class DeviceViewModel {
     func rename(to newName: String) async {
         do {
             try await device.send(MWSettings.SetDeviceName(validating: newName))
+            await refreshMACBroadcastAfterRename(newName)
         } catch {
             lastError = AppError(error: error)
+        }
+    }
+
+    /// The MAC-broadcast scan response freezes its embedded name at
+    /// configuration time — keep it in sync after a rename on boards this
+    /// app configured. Best-effort: a failure leaves the OLD name on air
+    /// until the next reconfiguration; it never blocks the rename itself.
+    private func refreshMACBroadcastAfterRename(_ newName: String) async {
+        guard let mac = macAddress,
+              appStore.macAdvertisementConfigured.contains(mac) else { return }
+        do {
+            try await device.updateMACAdvertisement(advertisedName: newName)
+            AppStore.log.info("Refreshed MAC broadcast name for \(mac, privacy: .public)")
+        } catch {
+            AppStore.log.error("MAC broadcast rename refresh failed for \(mac, privacy: .public): \(error, privacy: .public)")
         }
     }
 
