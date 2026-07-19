@@ -29,6 +29,33 @@ public struct MWSessionSnapshot: Sendable, Identifiable {
     /// 25 Hz". Nil for older records persisted before the field existed —
     /// callers should fall back to `sensorKind` when nil.
     public let label: String?
+    /// Display name of the board at capture time. Nil on records written
+    /// before the field existed — fall back to `deviceSerial`/`deviceModel`.
+    public let deviceName: String?
+    /// Group-capture batch, when several boards were logged together.
+    public let groupID: UUID?
+
+    /// Memberwise initializer — for previews and tests; production
+    /// snapshots come from `init(record:)`.
+    public init(
+        id: UUID = UUID(), deviceID: UUID = UUID(), sensorKind: String,
+        startDate: Date, endDate: Date, sampleCount: Int,
+        deviceSerial: String, deviceModel: String = "", deviceFirmware: String = "",
+        label: String? = nil, deviceName: String? = nil, groupID: UUID? = nil
+    ) {
+        self.id = id
+        self.deviceID = deviceID
+        self.sensorKind = sensorKind
+        self.startDate = startDate
+        self.endDate = endDate
+        self.sampleCount = sampleCount
+        self.deviceSerial = deviceSerial
+        self.deviceModel = deviceModel
+        self.deviceFirmware = deviceFirmware
+        self.label = label
+        self.deviceName = deviceName
+        self.groupID = groupID
+    }
 
     init(record: MWSessionRecord) {
         self.id             = record.id
@@ -36,10 +63,16 @@ public struct MWSessionSnapshot: Sendable, Identifiable {
         self.sensorKind     = record.sensorKind
         self.startDate      = record.startDate
         self.endDate        = record.endDate
-        self.sampleCount    = record.samples?.count ?? 0
+        // Prefer the denormalised count; pre-migration records carry 0 and
+        // fall back to counting the (prefetched) relationship.
+        self.sampleCount    = record.sampleCount > 0
+            ? record.sampleCount
+            : (record.samples?.count ?? 0)
         self.deviceSerial   = record.deviceSerial
         self.deviceModel    = record.deviceModel
         self.deviceFirmware = record.deviceFirmware
         self.label          = record.label
+        self.deviceName     = record.deviceName
+        self.groupID        = record.groupID
     }
 }

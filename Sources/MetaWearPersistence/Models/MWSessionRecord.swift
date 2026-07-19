@@ -33,6 +33,19 @@ public final class MWSessionRecord {
     /// hint for the history list. Nil on records written before this
     /// field was added.
     public var label: String?
+    /// Display name of the board at capture time ("bob", "MetaWear"). Must
+    /// be stamped at save: peripheral UUIDs are per-host and boards go off
+    /// air, so there is no reliable retroactive path from `deviceID` to a
+    /// name. Nil on records written before this field was added.
+    public var deviceName: String?
+    /// Denormalised sample count — lets list UIs show "1,234 samples"
+    /// without fetching the whole samples relationship. 0 on pre-migration
+    /// records; readers fall back to counting `samples`.
+    public var sampleCount: Int = 0
+    /// Group-capture batch this session belongs to, when several boards
+    /// were logged together. Nil for solo sessions and all records that
+    /// predate group logging.
+    public var groupID: UUID?
 
     /// Optional because CloudKit integration requires every relationship —
     /// including to-many — to be optional. Treat `nil` as "no samples"; the
@@ -49,7 +62,10 @@ public final class MWSessionRecord {
         deviceSerial: String,
         deviceModel: String,
         deviceFirmware: String,
-        label: String? = nil
+        label: String? = nil,
+        deviceName: String? = nil,
+        sampleCount: Int = 0,
+        groupID: UUID? = nil
     ) {
         self.id             = id
         self.deviceID       = deviceID
@@ -60,6 +76,9 @@ public final class MWSessionRecord {
         self.deviceModel    = deviceModel
         self.deviceFirmware = deviceFirmware
         self.label          = label
+        self.deviceName     = deviceName
+        self.sampleCount    = sampleCount
+        self.groupID        = groupID
         self.samples        = []
     }
 }

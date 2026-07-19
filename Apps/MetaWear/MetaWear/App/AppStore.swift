@@ -82,12 +82,24 @@ final class AppStore {
     /// The primary demo board — kept for call sites that predate the fleet.
     var demoDevice: MetaWearDevice { demoDevices[0] }
 
-    /// Display name for the active device: advertised name when we have one,
-    /// the demo label for a simulated device, generic fallback otherwise.
+    /// Display name for the active device: advertised name when we have
+    /// one, the demo label for a simulated device, then the REMEMBERED
+    /// name. The remembered fallback matters beyond cosmetics: a direct
+    /// reconnect to a known identifier (retrievePeripherals path) observes
+    /// zero advertisements, and this name gets STAMPED onto persisted
+    /// sessions — without it, a renamed board's sessions would be
+    /// attributed to the generic literal forever.
     var activeDeviceName: String {
         guard let id = activeDeviceID else { return "Device" }
         if let demoName = DemoMode.name(for: id) { return demoName }
-        return scanner.advertisedNames[id] ?? "MetaWear"
+        if let advertised = scanner.advertisedNames[id], !advertised.isEmpty {
+            return advertised
+        }
+        if let remembered = rememberedDevices.first(where: { $0.peripheralUUID == id })?.name,
+           !remembered.isEmpty {
+            return remembered
+        }
+        return "MetaWear"
     }
 
     var connectingDeviceID: UUID?

@@ -14,6 +14,9 @@ import MetaWearPersistence
 final class StreamSessionViewModel {
     private let device: MetaWearDevice
     private let persistence: MWPersistenceStore
+    /// Board display name stamped onto archived sessions — captured at
+    /// construction; peripheral UUIDs alone can't be named retroactively.
+    private let deviceName: String?
     var channels: [Channel] = []
     var isStreaming: Bool = false
     /// When true, BLE streams are torn down (`stopStreaming` sent to every
@@ -42,9 +45,10 @@ final class StreamSessionViewModel {
     /// BLE streams.
     var isTogglingPause: Bool = false
 
-    init(device: MetaWearDevice, persistence: MWPersistenceStore) {
+    init(device: MetaWearDevice, persistence: MWPersistenceStore, deviceName: String? = nil) {
         self.device = device
         self.persistence = persistence
+        self.deviceName = deviceName
     }
 
     /// True once the current buffer has been saved to Session History. Set
@@ -464,7 +468,8 @@ final class StreamSessionViewModel {
             }
             _ = try await persistence.saveSession(deviceID: deviceID, deviceInfo: deviceInfo,
                                             sensorKind: CartesianFloat.persistenceKind,
-                                            samples: typed, label: label)
+                                            samples: typed, label: label,
+                                            deviceName: deviceName)
 
         case .sensorFusion(.correctedAcceleration),
              .sensorFusion(.correctedAngularVelocity),
@@ -475,7 +480,8 @@ final class StreamSessionViewModel {
             }
             _ = try await persistence.saveSession(deviceID: deviceID, deviceInfo: deviceInfo,
                                             sensorKind: CorrectedCartesianFloat.persistenceKind,
-                                            samples: typed, label: label)
+                                            samples: typed, label: label,
+                                            deviceName: deviceName)
 
         case .sensorFusion(.quaternion):
             let typed = samples.map { s in
@@ -484,7 +490,8 @@ final class StreamSessionViewModel {
             }
             _ = try await persistence.saveSession(deviceID: deviceID, deviceInfo: deviceInfo,
                                             sensorKind: Quaternion.persistenceKind,
-                                            samples: typed, label: label)
+                                            samples: typed, label: label,
+                                            deviceName: deviceName)
 
         case .sensorFusion(.eulerAngles):
             let typed = samples.map { s in
@@ -493,7 +500,8 @@ final class StreamSessionViewModel {
             }
             _ = try await persistence.saveSession(deviceID: deviceID, deviceInfo: deviceInfo,
                                             sensorKind: EulerAngles.persistenceKind,
-                                            samples: typed, label: label)
+                                            samples: typed, label: label,
+                                            deviceName: deviceName)
 
         case .barometer, .temperature, .humidity, .ambientLight:
             let typed = samples.map { s in
@@ -501,7 +509,8 @@ final class StreamSessionViewModel {
             }
             _ = try await persistence.saveSession(deviceID: deviceID, deviceInfo: deviceInfo,
                                             sensorKind: Float.persistenceKind,
-                                            samples: typed, label: label)
+                                            samples: typed, label: label,
+                                            deviceName: deviceName)
         }
     }
 
