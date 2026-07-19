@@ -213,6 +213,8 @@ public actor DemoBLETransport: BLETransport {
             emit([0x11, register, 87, 0xF0, 0x0F])
         case (0x11, 0x0B):   // MAC (7-byte form: type 0x01 + LE address)
             emit([0x11, register, 0x01, 0x01, 0xE0, 0x0D, 0x0E, 0x3D, 0xDE])
+        case (0x0B, 0x01):   // logging enabled? (foreign-session detection)
+            emit([0x0B, register, loggingEnabled ? 1 : 0])
         case (0x0B, 0x04):   // logging time: tick + reset uid
             let tick = UInt32(elapsed() * 1000.0 / 1.46484375)
             emit([0x0B, register] + le32(tick) + [0x01])

@@ -47,6 +47,13 @@ final class AppStore {
     /// discard the data; cleared by `dismissOrphanLog` or `discardOrphanLog`.
     var orphanLogState: OrphanLogState?
 
+    /// Boards holding foreign log data, keyed by peripheral UUID. Unlike
+    /// the one-shot connect alert (`orphanLogState`), this SURVIVES the
+    /// alert's dismissal so the Log Session screen can offer Stop &
+    /// Download at any time — "Keep" is no longer a dead end. Cleared by
+    /// download/discard, or when a local record claims the board.
+    private(set) var foreignLogs: [UUID: OrphanLogState] = [:]
+
     /// Progress of an in-flight orphan-log download (triggered from the
     /// orphan-log alert's "Download" button). Anonymous-logger flow: the
     /// SDK reconstructs the signals from on-board metadata via
@@ -159,50 +166,109 @@ final class AppStore {
     /// more — that used to be a blanket clean-up after our own crashes,
     /// but it also wiped legitimate state belonging to other apps.
     private func cleanUpOrphanResources(on device: MetaWearDevice) async {
-        let id = device.identifier
-        let anyPendingForDevice = pendingLogSessions.contains { $0.deviceID == id }
+        if let state = await evaluateForeignLog(on: device, surfaceAlert: true) {
+            orphanLogState = state
+        }
+    }
 
-        // If our local store knows about a session on this device, the
-        // board's state is ours — leave it alone; Download/Stop in the
-        // app's own UI handles teardown.
-        if anyPendingForDevice { return }
+    /// Re-evaluate a board's foreign-log status on demand — the Log
+    /// Session screen calls this on appear so the download path stays
+    /// discoverable after the connect-time alert was dismissed (or when
+    /// logging started elsewhere AFTER this phone connected).
+    func refreshForeignLogState(for device: MetaWearDevice) async {
+        _ = await evaluateForeignLog(on: device, surfaceAlert: false)
+    }
+
+    /// Shared detection: reads the board's logging state, applies the pure
+    /// decision table, updates `foreignLogs`, and performs the silent
+    /// cleanup of provably-garbage entries. Returns a state when the
+    /// caller should raise the connect-time alert.
+    private func evaluateForeignLog(
+        on device: MetaWearDevice, surfaceAlert: Bool
+    ) async -> OrphanLogState? {
+        let id = device.identifier
+        let hasLocalPending = pendingLogSessions.contains { $0.deviceID == id }
 
         let entryCount: UInt32
         do {
             entryCount = try await device.read(MWLogLength()).value
         } catch {
             lastError = AppError(error: error)
-            return
+            return nil
         }
-        guard entryCount > 0 else { return }
+        // The enabled read catches a session in progress even when the
+        // entry count is 0 (MMS buffers the first flash page in RAM).
+        let loggingEnabled = (try? await device.read(MWLoggingEnabled()).value) ?? false
+        let activeLoggers = try? await device.queryActiveLoggers()
 
-        let activeLoggers: [ActiveLogger]
-        do {
-            activeLoggers = try await device.queryActiveLoggers()
-        } catch {
-            // Enumeration failed, so we cannot prove the entries are
-            // undecodable garbage. Keep the on-board data and surface the
-            // orphan flow instead of clearing recoverable logs.
-            orphanLogState = OrphanLogState(entryCount: entryCount, deviceID: id)
-            return
-        }
-        if activeLoggers.isEmpty {
-            // Entries with no logger subscriptions are guaranteed
-            // garbage — there's no decoder anywhere that could turn
-            // them into samples. Drop them so we don't re-alert on
-            // every reconnect.
+        let decision = Self.foreignLogDecision(
+            entryCount: entryCount,
+            hasActiveLoggers: activeLoggers.map { !$0.isEmpty },
+            isLoggingEnabled: loggingEnabled,
+            hasLocalPendingRecord: hasLocalPending
+        )
+        switch decision {
+        case .surface(let isActive):
+            let state = OrphanLogState(
+                entryCount: entryCount, deviceID: id, isActivelyLogging: isActive
+            )
+            foreignLogs[id] = state
+            return surfaceAlert ? state : nil
+        case .silentClear:
+            // Entries with no logger subscriptions are guaranteed garbage —
+            // no decoder anywhere could turn them into samples. Drop them so
+            // we don't re-alert on every reconnect.
             do {
                 try await device.clearLog()
             } catch {
                 lastError = AppError(error: error)
             }
-            return
+            foreignLogs[id] = nil
+            return nil
+        case .leaveAlone:
+            foreignLogs[id] = nil
+            return nil
         }
+    }
 
-        // Real entries + real loggers, but no matching local record →
-        // the data belongs to someone else (different phone, previous
-        // install, third-party app). Surface to the user.
-        orphanLogState = OrphanLogState(entryCount: entryCount, deviceID: id)
+    enum ForeignLogDecision: Equatable {
+        /// Recoverable foreign data (or a session in progress) — show it.
+        case surface(isActivelyLogging: Bool)
+        /// Entries with no loggers: undecodable garbage, clear silently.
+        case silentClear
+        /// Nothing foreign here (or it's this phone's own session).
+        case leaveAlone
+    }
+
+    /// Pure decision table for foreign-log detection, unit-tested.
+    ///
+    /// - Parameters:
+    ///   - hasActiveLoggers: `nil` when enumeration failed — we then can't
+    ///     prove entries are garbage, so anything suggesting data surfaces.
+    static func foreignLogDecision(
+        entryCount: UInt32,
+        hasActiveLoggers: Bool?,
+        isLoggingEnabled: Bool,
+        hasLocalPendingRecord: Bool
+    ) -> ForeignLogDecision {
+        // A local record means the board's state is ours; the app's own
+        // Download/Stop UI handles teardown.
+        if hasLocalPendingRecord { return .leaveAlone }
+        switch hasActiveLoggers {
+        case .some(true):
+            if entryCount > 0 || isLoggingEnabled {
+                return .surface(isActivelyLogging: isLoggingEnabled)
+            }
+            // Armed loggers, no entries, not sampling: configured but never
+            // started. Nothing recoverable; leave the wiring alone.
+            return .leaveAlone
+        case .some(false):
+            return entryCount > 0 ? .silentClear : .leaveAlone
+        case .none:
+            return (entryCount > 0 || isLoggingEnabled)
+                ? .surface(isActivelyLogging: isLoggingEnabled)
+                : .leaveAlone
+        }
     }
 
     /// Wipe the orphan log entries the user was just told about. Called
@@ -221,14 +287,16 @@ final class AppStore {
         do {
             try await device.clearLog()
             orphanLogState = nil
+            foreignLogs[state.deviceID] = nil
         } catch {
             orphanLogState = state
             lastError = AppError(error: error)
         }
     }
 
-    /// Dismiss the orphan-log alert without touching the board. Subsequent
-    /// `startLogging` will clear the stale loggers as part of its setup.
+    /// Dismiss the orphan-log ALERT without touching the board. Not a dead
+    /// end: the persistent `foreignLogs` entry keeps the Stop & Download
+    /// path available on the Log Session screen.
     func dismissOrphanLog() {
         orphanLogState = nil
     }
@@ -253,6 +321,10 @@ final class AppStore {
         orphanDownloadPhase = .downloading(progress: 0)
 
         do {
+            // If the foreign session is still recording, stop the sampling
+            // first so the readout doesn't race concurrent writes. Entries
+            // and logger metadata stay intact; no-op when already stopped.
+            try await device.stopOnBoardLogging()
             let signals = try await device.createAnonymousDataSignals()
             guard !signals.isEmpty else {
                 // The board reported `LOG_LENGTH > 0` but no recoverable
@@ -260,6 +332,7 @@ final class AppStore {
                 // type we don't decode yet. Clear so we don't keep re-
                 // alerting on every reconnect.
                 try await device.clearLog()
+                foreignLogs[state.deviceID] = nil
                 orphanDownloadPhase = .completed(savedCount: 0)
                 return
             }
@@ -288,6 +361,7 @@ final class AppStore {
             }
 
             try await device.clearLog()
+            foreignLogs[state.deviceID] = nil
             orphanDownloadPhase = .completed(savedCount: savedCount)
         } catch {
             orphanDownloadPhase = .failed(message: error.localizedDescription)
@@ -753,13 +827,18 @@ struct AppError: Identifiable, Sendable {
     }
 }
 
-/// Reported when a freshly connected board has on-flash log entries that
-/// no local record claims — the SDK reads `LOG_LENGTH` after connect, and
-/// any non-zero count without a matching pending session lands here.
+/// Reported when a connected board holds (or is actively recording) log
+/// data that no local record claims — a session started on another phone,
+/// a previous install, or a third-party app.
 struct OrphanLogState: Identifiable, Sendable {
     let id = UUID()
     let entryCount: UInt32
     let deviceID: UUID
+    /// True when the board's logging is currently ENABLED — a session in
+    /// progress, not just leftover data. Drives the user-facing copy and
+    /// catches the MMS case where `LOG_LENGTH` reads 0 because the first
+    /// flash page is still buffering in RAM.
+    let isActivelyLogging: Bool
 }
 
 /// Lifecycle of an orphan-log download. Drives the modal overlay shown in

@@ -1115,6 +1115,17 @@ public actor MetaWearDevice {
         loggerRegistry.removeAll()
     }
 
+    /// Stop on-board logging sampling (`[0x0B, 0x01, 0x00]`) WITHOUT
+    /// touching stored entries or logger subscriptions.
+    ///
+    /// For foreign sessions — logging started by another host — call this
+    /// before `downloadLogs()` so the readout doesn't race concurrent
+    /// writes; the entries and the logger metadata needed to decode them
+    /// stay intact. A no-op if logging is already stopped.
+    public func stopOnBoardLogging() async throws {
+        try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))
+    }
+
     /// Flush the active logging page to flash so in-flight samples become readable.
     ///
     /// Only valid on MMS boards — firmware ignores this command on MMRL, so the

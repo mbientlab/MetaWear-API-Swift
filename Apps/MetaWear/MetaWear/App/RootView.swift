@@ -126,12 +126,16 @@ private struct ErrorAndOrphanAlerts: ViewModifier {
                 Button("Download") {
                     Task { await appStore.downloadOrphanLog(state) }
                 }
-                Button("Keep", role: .cancel) { appStore.dismissOrphanLog() }
+                Button("Not Now", role: .cancel) { appStore.dismissOrphanLog() }
                 Button("Discard", role: .destructive) {
                     Task { await appStore.discardOrphanLog(state) }
                 }
             } message: { state in
-                Text("This device has \(state.entryCount) log entries from a previous session. Download them (parsed via the anonymous-logger flow), keep them on the board, or discard?")
+                if state.isActivelyLogging {
+                    Text("This board is logging a session started on another device\(state.entryCount > 0 ? " (\(state.entryCount) entries so far)" : ""). Download stops the logging and saves the data. You can also do this later from the Logging screen.")
+                } else {
+                    Text("This board holds \(state.entryCount) log entries from a session this phone doesn't know about. Download them, or handle it later from the Logging screen.")
+                }
             }
             // Result-of-orphan-download alert — only shown for the two
             // terminal phases. Tapping OK resets the phase back to .idle.
