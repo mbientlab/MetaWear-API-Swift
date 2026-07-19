@@ -241,7 +241,7 @@ private struct FirmwareSection: View {
             LabeledContent("Status") {
                 Label("Up to date", systemImage: "checkmark.circle.fill")
                     .labelStyle(.titleAndIcon)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Palette.success)
             }
             Button("Check Again", systemImage: "arrow.triangle.2.circlepath") {
                 Task { await viewModel.checkForUpdate() }
@@ -269,12 +269,12 @@ private struct FirmwareSection: View {
             LabeledContent("Status") {
                 Label("Updated", systemImage: "checkmark.circle.fill")
                     .labelStyle(.titleAndIcon)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Palette.success)
             }
 
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(Palette.warning)
             Button("Try Again", systemImage: "arrow.triangle.2.circlepath") {
                 Task { await viewModel.checkForUpdate() }
             }
