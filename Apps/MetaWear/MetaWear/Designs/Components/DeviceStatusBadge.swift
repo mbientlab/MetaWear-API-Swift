@@ -15,7 +15,10 @@ struct DeviceStatusBadge: View {
         case .connected(let rssi):
             // Live link quality rides inside the badge: boards stop
             // advertising once connected, so this RSSI comes from the
-            // AppStore's connection poll, not from advertisements.
+            // AppStore's connection poll, not from advertisements. Bars
+            // only, tinted to match the badge — the precise dBm lives in
+            // Device Info's Signal row, and the extra text made the badge
+            // wrap to two lines in the scan row.
             HStack(spacing: 6) {
                 Image(systemName: "circle.fill")
                     .font(.caption2)
@@ -24,12 +27,11 @@ struct DeviceStatusBadge: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(Palette.success)
                 if let rssi {
-                    RSSIBars(dBm: rssi)
-                    Text("\(rssi) dBm")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(Palette.success)
+                    RSSIBars(dBm: rssi, tint: Palette.success)
                 }
             }
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(Capsule().fill(Palette.success.opacity(0.15)))

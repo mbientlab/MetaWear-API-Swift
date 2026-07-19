@@ -2,6 +2,9 @@ import SwiftUI
 
 struct RSSIBars: View {
     let dBm: Int?
+    /// Fill for the active bars. Defaults to the accent used in scan rows;
+    /// the connected badge passes its green so the bars match the badge.
+    var tint: Color = Palette.accent
 
     private var bars: Int {
         guard let dBm else { return 0 }
@@ -17,7 +20,7 @@ struct RSSIBars: View {
         HStack(spacing: 2) {
             ForEach(0..<4) { index in
                 Capsule()
-                    .fill(index < bars ? Palette.accent : Color.secondary.opacity(0.3))
+                    .fill(index < bars ? tint : Color.secondary.opacity(0.3))
                     .frame(width: 3, height: 6 + CGFloat(index) * 3)
             }
         }
