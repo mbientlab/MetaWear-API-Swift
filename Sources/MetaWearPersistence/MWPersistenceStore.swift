@@ -58,7 +58,9 @@ public actor MWPersistenceStore {
         deviceInfo: MWDeviceInformation,
         sensorKind: String,
         samples: [MWLoggedSample<S>],
-        label: String? = nil
+        label: String? = nil,
+        deviceName: String? = nil,
+        groupID: UUID? = nil
     ) throws -> MWSessionSnapshot {
         guard !samples.isEmpty else { throw MWPersistenceError.emptySampleSet }
 
@@ -70,7 +72,14 @@ public actor MWPersistenceStore {
             deviceSerial:   deviceInfo.serialNumber,
             deviceModel:    deviceInfo.modelNumber,
             deviceFirmware: deviceInfo.firmwareRevision,
-            label:          label
+            label:          label,
+            // A missed advertisement can surface as "" — normalise here,
+            // at the single choke point, so readers' nil-name fallbacks
+            // (serial keys, section titles) fire instead of rendering
+            // blank headers.
+            deviceName:     (deviceName?.isEmpty ?? true) ? nil : deviceName,
+            sampleCount:    samples.count,
+            groupID:        groupID
         )
         modelContext.insert(session)
 

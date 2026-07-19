@@ -17,10 +17,21 @@ enum CSVExporter {
         // discriminator ("cartesian", etc.) when the snapshot predates the
         // rich label and we can't derive a sensor-specific tag.
         let tag = streamingTag(forLabel: snapshot.label) ?? snapshot.sensorKind
+        // Prefer the name stamped at capture time; the explicit parameter
+        // and the DIS model string remain as fallbacks for records that
+        // predate the deviceName field. Un-renamed boards all say
+        // "MetaWear", so the DIS serial rides along to keep files from a
+        // same-named fleet human-attributable (the UUID discriminator only
+        // guarantees uniqueness, not attribution).
+        let base = snapshot.deviceName ?? deviceName ?? snapshot.deviceModel
+        let exportName = (base == "MetaWear" && !snapshot.deviceSerial.isEmpty)
+            ? "\(base)-\(snapshot.deviceSerial)"
+            : base
         let filename = ExportFilename.make(
-            deviceName: deviceName ?? snapshot.deviceModel,
+            deviceName: exportName,
             sensorKind: tag,
-            date: snapshot.startDate
+            date: snapshot.startDate,
+            discriminator: String(snapshot.id.uuidString.prefix(4))
         )
         let url = URL.temporaryDirectory.appending(path: filename)
         try table.writeCSV(to: url)

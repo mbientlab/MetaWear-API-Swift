@@ -96,7 +96,8 @@ struct LiveStreamView: View {
         .task {
             guard let device = appStore.activeDevice else { return }
             if viewModel == nil {
-                let vm = StreamSessionViewModel(device: device, persistence: appStore.persistence)
+                let vm = StreamSessionViewModel(device: device, persistence: appStore.persistence,
+                                                deviceName: appStore.activeDeviceName)
                 viewModel = vm
                 await vm.start(selections)
             }

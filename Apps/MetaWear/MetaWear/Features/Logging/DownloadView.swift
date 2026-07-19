@@ -79,7 +79,8 @@ struct DownloadView: View {
                 viewModel = DownloadViewModel(
                     device: device,
                     store: appStore.persistence,
-                    containers: appStore.containers
+                    containers: appStore.containers,
+                    deviceName: appStore.activeDeviceName
                 )
             }
             // `.task` can re-fire on re-insertion (split-view column

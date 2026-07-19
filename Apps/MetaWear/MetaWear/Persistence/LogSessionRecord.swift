@@ -19,6 +19,10 @@ final class LogSessionRecord {
     /// remembered across app restarts. Nil for natively-loggable sensors,
     /// whose registry can be recovered by module + register match alone.
     var polledHandlesJSON: String?
+    /// Group-capture batch this pending session belongs to — stamped when
+    /// logging is started on several boards together so the downloaded
+    /// `MWSessionRecord`s can inherit it. Nil for solo sessions.
+    var groupID: UUID?
 
     var status: Status {
         get { Status(rawValue: statusRaw) ?? .running }
@@ -33,7 +37,8 @@ final class LogSessionRecord {
         loggerKey: String,
         startDate: Date = .now,
         status: Status = .running,
-        polledHandlesJSON: String? = nil
+        polledHandlesJSON: String? = nil,
+        groupID: UUID? = nil
     ) {
         self.id = id
         self.deviceID = deviceID
@@ -43,6 +48,7 @@ final class LogSessionRecord {
         self.startDate = startDate
         self.statusRaw = status.rawValue
         self.polledHandlesJSON = polledHandlesJSON
+        self.groupID = groupID
     }
 
     enum Status: String, Sendable {

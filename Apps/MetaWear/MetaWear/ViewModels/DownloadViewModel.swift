@@ -27,14 +27,20 @@ final class DownloadViewModel {
     private let device: MetaWearDevice
     private let store: MWPersistenceStore
     private let containers: AppContainers
+    /// Board display name stamped onto every session this download saves —
+    /// captured at construction because there is no reliable retroactive
+    /// path from a per-host peripheral UUID to a name.
+    private let deviceName: String?
 
     var phase: Phase = .idle
     var lastError: AppError?
 
-    init(device: MetaWearDevice, store: MWPersistenceStore, containers: AppContainers) {
+    init(device: MetaWearDevice, store: MWPersistenceStore, containers: AppContainers,
+         deviceName: String? = nil) {
         self.device = device
         self.store = store
         self.containers = containers
+        self.deviceName = deviceName
     }
 
     /// Drain every active logger on the board with a SINGLE raw `downloadLogs()`
@@ -304,7 +310,7 @@ final class DownloadViewModel {
             return try await store.saveSession(
                 deviceID: device.identifier, deviceInfo: info,
                 sensorKind: CartesianFloat.persistenceKind,
-                samples: mapped, label: label)
+                samples: mapped, label: label, deviceName: deviceName)
 
         case .scalar:
             let mapped: [MWLoggedSample<Float>] = samples.compactMap {
@@ -315,7 +321,7 @@ final class DownloadViewModel {
             return try await store.saveSession(
                 deviceID: device.identifier, deviceInfo: info,
                 sensorKind: Float.persistenceKind,
-                samples: mapped, label: label)
+                samples: mapped, label: label, deviceName: deviceName)
 
         case .quaternion:
             let mapped: [MWLoggedSample<Quaternion>] = samples.compactMap {
@@ -326,7 +332,7 @@ final class DownloadViewModel {
             return try await store.saveSession(
                 deviceID: device.identifier, deviceInfo: info,
                 sensorKind: Quaternion.persistenceKind,
-                samples: mapped, label: label)
+                samples: mapped, label: label, deviceName: deviceName)
 
         case .euler:
             let mapped: [MWLoggedSample<EulerAngles>] = samples.compactMap {
@@ -337,7 +343,7 @@ final class DownloadViewModel {
             return try await store.saveSession(
                 deviceID: device.identifier, deviceInfo: info,
                 sensorKind: EulerAngles.persistenceKind,
-                samples: mapped, label: label)
+                samples: mapped, label: label, deviceName: deviceName)
 
         case .correctedCartesian:
             let mapped: [MWLoggedSample<CorrectedCartesianFloat>] = samples.compactMap {
@@ -348,7 +354,7 @@ final class DownloadViewModel {
             return try await store.saveSession(
                 deviceID: device.identifier, deviceInfo: info,
                 sensorKind: CorrectedCartesianFloat.persistenceKind,
-                samples: mapped, label: label)
+                samples: mapped, label: label, deviceName: deviceName)
         }
     }
 
@@ -389,14 +395,15 @@ final class DownloadViewModel {
             return nil
         }
         let label = selection.label
+        let groupID = record.groupID
 
         switch selection.id {
         case .accelerometer:
             let rangeG = Float(selection.range ?? 2)
             let impl: UInt8 = chip == .bmi270 ? 4 : 1
             switch MWAccelerometer.make(impl: impl, odrHz: selection.hz, rangeG: rangeG) {
-            case .bmi160(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries)
-            case .bmi270(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries)
+            case .bmi160(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries, groupID: groupID)
+            case .bmi270(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries, groupID: groupID)
             case nil:             return nil
             }
 
@@ -404,8 +411,8 @@ final class DownloadViewModel {
             let rangeDPS = Float(selection.range ?? 2000)
             let impl: UInt8 = chip == .bmi270 ? 1 : 0
             switch MWGyroscope.make(impl: impl, odrHz: selection.hz, rangeDPS: rangeDPS) {
-            case .bmi160(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries)
-            case .bmi270(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries)
+            case .bmi160(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries, groupID: groupID)
+            case .bmi270(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries, groupID: groupID)
             case nil:             return nil
             }
 
@@ -414,52 +421,52 @@ final class DownloadViewModel {
                 abs($0.hz - selection.hz) < abs($1.hz - selection.hz)
             } ?? .hz10
             return try await decodeAndPersist(MWMagnetometer(xyReps: 9, zReps: 15, odr: odr),
-                                              info: info, label: label, entries: entries)
+                                              info: info, label: label, entries: entries, groupID: groupID)
 
         case .sensorFusion(let out):
             switch out {
             case .quaternion:
                 return try await decodeAndPersist(MWSensorFusionQuaternion(chip: chip),
-                                                  info: info, label: label, entries: entries)
+                                                  info: info, label: label, entries: entries, groupID: groupID)
             case .eulerAngles:
                 return try await decodeAndPersist(MWSensorFusionEuler(chip: chip),
-                                                  info: info, label: label, entries: entries)
+                                                  info: info, label: label, entries: entries, groupID: groupID)
             case .gravity:
                 return try await decodeAndPersist(MWSensorFusionGravity(chip: chip),
-                                                  info: info, label: label, entries: entries)
+                                                  info: info, label: label, entries: entries, groupID: groupID)
             case .linearAcceleration:
                 return try await decodeAndPersist(MWSensorFusionLinearAcceleration(chip: chip),
-                                                  info: info, label: label, entries: entries)
+                                                  info: info, label: label, entries: entries, groupID: groupID)
             case .correctedAcceleration:
                 return try await decodeAndPersist(MWSensorFusionCorrectedAcc(chip: chip),
-                                                  info: info, label: label, entries: entries)
+                                                  info: info, label: label, entries: entries, groupID: groupID)
             case .correctedAngularVelocity:
                 return try await decodeAndPersist(MWSensorFusionCorrectedGyro(chip: chip),
-                                                  info: info, label: label, entries: entries)
+                                                  info: info, label: label, entries: entries, groupID: groupID)
             case .correctedMagneticField:
                 return try await decodeAndPersist(MWSensorFusionCorrectedMag(chip: chip),
-                                                  info: info, label: label, entries: entries)
+                                                  info: info, label: label, entries: entries, groupID: groupID)
             }
 
         case .barometer:
-            return try await decodeAndPersist(MWBarometer(), info: info, label: label, entries: entries)
+            return try await decodeAndPersist(MWBarometer(), info: info, label: label, entries: entries, groupID: groupID)
 
         case .ambientLight:
-            return try await decodeAndPersistAmbientLight(info: info, label: label, entries: entries)
+            return try await decodeAndPersistAmbientLight(info: info, label: label, entries: entries, groupID: groupID)
 
         case .temperature:
             let polled = MWPolledLogger(
                 readable: MWThermometer(channel: UInt8(selection.channel ?? 0)),
                 periodMs: LogSessionViewModel.periodMs(forHz: selection.hz)
             )
-            return try await decodeAndPersistPolled(polled, info: info, label: label, entries: entries)
+            return try await decodeAndPersistPolled(polled, info: info, label: label, entries: entries, groupID: groupID)
 
         case .humidity:
             let polled = MWPolledLogger(
                 readable: MWHumidity(),
                 periodMs: LogSessionViewModel.periodMs(forHz: selection.hz)
             )
-            return try await decodeAndPersistPolled(polled, info: info, label: label, entries: entries)
+            return try await decodeAndPersistPolled(polled, info: info, label: label, entries: entries, groupID: groupID)
         }
     }
 
@@ -467,7 +474,8 @@ final class DownloadViewModel {
         _ loggable: L,
         info: MWDeviceInformation,
         label: String,
-        entries: [RawLogEntry]
+        entries: [RawLogEntry],
+        groupID: UUID? = nil
     ) async throws -> MWSessionSnapshot? where L.Sample: MWPersistable {
         let samples = try await device.decodeEntries(entries, for: loggable)
         guard !samples.isEmpty else { return nil }
@@ -476,7 +484,9 @@ final class DownloadViewModel {
             deviceInfo: info,
             sensorKind: L.Sample.persistenceKind,
             samples: samples,
-            label: label
+            label: label,
+            deviceName: deviceName,
+            groupID: groupID
         )
     }
 
@@ -486,7 +496,8 @@ final class DownloadViewModel {
         _ logger: MWPolledLogger<R>,
         info: MWDeviceInformation,
         label: String,
-        entries: [RawLogEntry]
+        entries: [RawLogEntry],
+        groupID: UUID? = nil
     ) async throws -> MWSessionSnapshot? where R.Sample: MWPersistable {
         let samples = try await device.decodeEntries(entries, for: logger)
         guard !samples.isEmpty else { return nil }
@@ -495,7 +506,9 @@ final class DownloadViewModel {
             deviceInfo: info,
             sensorKind: R.Sample.persistenceKind,
             samples: samples,
-            label: label
+            label: label,
+            deviceName: deviceName,
+            groupID: groupID
         )
     }
 
@@ -505,7 +518,8 @@ final class DownloadViewModel {
     private func decodeAndPersistAmbientLight(
         info: MWDeviceInformation,
         label: String,
-        entries: [RawLogEntry]
+        entries: [RawLogEntry],
+        groupID: UUID? = nil
     ) async throws -> MWSessionSnapshot? {
         let raw = try await device.decodeEntries(entries, for: MWAmbientLight())
         guard !raw.isEmpty else { return nil }
@@ -517,7 +531,9 @@ final class DownloadViewModel {
             deviceInfo: info,
             sensorKind: Float.persistenceKind,
             samples: asFloat,
-            label: label
+            label: label,
+            deviceName: deviceName,
+            groupID: groupID
         )
     }
 }
