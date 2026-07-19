@@ -123,3 +123,13 @@ struct MWModelTests {
         #expect(info.isHardwareRevisionSupported == false)
     }
 }
+
+@Suite("MWModel short names")
+struct MWModelShortNameTests {
+    @Test
+    func shortNamesAreCompactAbbreviations() {
+        #expect(MWModel.motionS.shortName == "MMS")
+        #expect(MWModel.motionRL.shortName == "MMRL")
+        #expect(MWModel.unknown(modelNumber: "3").shortName == "3")
+    }
+}

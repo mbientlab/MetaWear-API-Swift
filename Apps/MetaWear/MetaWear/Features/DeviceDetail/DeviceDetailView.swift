@@ -75,7 +75,9 @@ struct DeviceDetailView: View {
                 HStack(spacing: 8) {
                     BatteryPill(battery: vm.battery)
                     if let info = vm.deviceInfo {
-                        Text(info.model.name)
+                        // Short model names (MMS / MMRL) make room for the
+                        // live signal pill alongside battery + firmware.
+                        Text(info.model.shortName)
                             .font(.metricCaption)
                             .foregroundStyle(Palette.accent)
                             .glassPill()
@@ -83,6 +85,15 @@ struct DeviceDetailView: View {
                             .font(.metricCaption.monospaced())
                             .foregroundStyle(.secondary)
                             .glassPill()
+                    }
+                    if let rssi = appStore.connectedRSSI {
+                        HStack(spacing: 4) {
+                            RSSIBars(dBm: rssi)
+                            Text("\(rssi) dBm")
+                                .font(.metricCaption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                        .glassPill()
                     }
                 }
             }
