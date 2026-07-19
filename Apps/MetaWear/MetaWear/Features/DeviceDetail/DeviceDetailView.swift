@@ -66,8 +66,13 @@ struct DeviceDetailView: View {
         GlassEffectContainer {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
+                    // Sized to share the row with the signal + state pills:
+                    // one line always, shrinking slightly on narrow phones
+                    // rather than wrapping.
                     Text(vm.macAddress ?? "—")
-                        .font(.title3.weight(.semibold).monospaced())
+                        .font(.callout.weight(.semibold).monospaced())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                     Spacer()
                     // Live link quality sits beside the state pill — the
                     // top row has the free width, unlike the pill row below.
