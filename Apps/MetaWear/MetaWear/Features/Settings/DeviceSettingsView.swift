@@ -83,9 +83,11 @@ struct DeviceSettingsView: View {
             }
             await refreshLogStats()
         }
-        .confirmationDialog("Factory reset this MetaWear?",
-                            isPresented: $showFactoryResetConfirm,
-                            titleVisibility: .visible) {
+        // Alerts, not confirmation dialogs, for every destructive confirm:
+        // dialogs anchor to the triggering control (a popover on iPad/Mac)
+        // and land in odd places — alerts center on screen everywhere.
+        .alert("Factory reset this MetaWear?",
+               isPresented: $showFactoryResetConfirm) {
             Button("Reset", role: .destructive) {
                 Task { await viewModel?.factoryReset() }
             }
@@ -93,9 +95,8 @@ struct DeviceSettingsView: View {
         } message: {
             Text("This will erase all on-device state. The board will reboot and disconnect.")
         }
-        .confirmationDialog("Clear all log data and loggers?",
-                            isPresented: $showClearLogsConfirm,
-                            titleVisibility: .visible) {
+        .alert("Clear all log data and loggers?",
+               isPresented: $showClearLogsConfirm) {
             Button("Clear", role: .destructive) {
                 Task { await clearLogs() }
             }
@@ -176,9 +177,10 @@ private struct FirmwareSection: View {
         } footer: {
             footer
         }
-        .confirmationDialog("Update firmware?",
-                            isPresented: $showUpdateConfirm,
-                            titleVisibility: .visible) {
+        // Alerts (centered) rather than anchored confirmation dialogs — see
+        // the note on the settings-screen confirms above.
+        .alert("Update firmware?",
+               isPresented: $showUpdateConfirm) {
             Button("Update") {
                 Task { await viewModel.startUpdate() }
             }
@@ -186,9 +188,8 @@ private struct FirmwareSection: View {
         } message: {
             Text("Keep MetaWear open with the board nearby and powered until the update finishes. The board restarts automatically when it's done.")
         }
-        .confirmationDialog("Reinstall current firmware?",
-                            isPresented: $showReinstallConfirm,
-                            titleVisibility: .visible) {
+        .alert("Reinstall current firmware?",
+               isPresented: $showReinstallConfirm) {
             Button("Reinstall", role: .destructive) {
                 Task { await viewModel.startUpdate(forceReinstall: true) }
             }
