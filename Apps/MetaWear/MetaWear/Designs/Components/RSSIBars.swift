@@ -2,9 +2,11 @@ import SwiftUI
 
 struct RSSIBars: View {
     let dBm: Int?
-    /// Fill for the active bars. Defaults to the accent used in scan rows;
-    /// the connected badge passes its green so the bars match the badge.
-    var tint: Color = Palette.accent
+    /// Fill for the active bars. Defaults to the info blue so the bars match
+    /// the blue capsule styling they sit in (RSSIPill, scan-row badge) —
+    /// deliberately NOT `Palette.accent`, which is the brand orange; the
+    /// connected badge passes its green so the bars match the badge.
+    var tint: Color = Palette.info
 
     private var bars: Int {
         guard let dBm else { return 0 }
