@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import MetaWear
 import MetaWearFirmware
+import os
 
 /// Presentation model for the Settings → Firmware section.
 ///
@@ -88,7 +89,9 @@ final class FirmwareUpdateViewModel {
     /// dialog), so `.disconnected` gets one automatic reconnect attempt before
     /// giving up — and its failure message says "reconnect", not the
     /// misleading busy-device text.
-    func startUpdate() async {
+    /// - Parameter forceReinstall: Flash the latest catalog build even when
+    ///   the board already runs it — a recovery path for a misbehaving board.
+    func startUpdate(forceReinstall: Bool = false) async {
         if case .disconnected = await device.state {
             phase = .checking
             await appStore.connect(to: device)
@@ -107,7 +110,9 @@ final class FirmwareUpdateViewModel {
 
         var sawCompleted = false
         do {
-            for try await progress in device.updateFirmwareToLatest() {
+            for try await progress in device.updateFirmwareToLatest(
+                forceReinstall: forceReinstall
+            ) {
                 phase = .updating(progress)
                 if progress.state == .completed { sawCompleted = true }
             }
@@ -130,8 +135,27 @@ final class FirmwareUpdateViewModel {
         }
 
         await reconnect()
+        await restoreMACBroadcast()
         await loadCurrentVersion()
         phase = .completed
+    }
+
+    /// A firmware flash wipes on-board macros — including the MAC-broadcast
+    /// macro this app records. Re-establish it after a successful update on
+    /// boards this host configured, or they'd turn anonymous again after
+    /// their next power cycle. Uses the erase-and-re-record path so the
+    /// outcome is one macro regardless of what survived the flash.
+    /// Best-effort: the next connect's configuration gate is the backstop.
+    private func restoreMACBroadcast() async {
+        guard let mac = try? await device.read(MWSettings.ReadMacAddress()).value,
+              appStore.macAdvertisementConfigured.contains(mac) else { return }
+        do {
+            let name = appStore.scanner.advertisedNames[device.identifier] ?? "MetaWear"
+            try await device.updateMACAdvertisement(advertisedName: name)
+            AppStore.log.info("Restored MAC broadcast after firmware flash for \(mac, privacy: .public)")
+        } catch {
+            AppStore.log.error("MAC broadcast restore after flash failed for \(mac, privacy: .public): \(error, privacy: .public)")
+        }
     }
 
     /// Re-establish a coherent connection after the board reboots out of DFU.

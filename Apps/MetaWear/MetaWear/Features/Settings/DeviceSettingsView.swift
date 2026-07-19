@@ -161,6 +161,7 @@ struct DeviceSettingsView: View {
 private struct FirmwareSection: View {
     let viewModel: FirmwareUpdateViewModel
     @State private var showUpdateConfirm = false
+    @State private var showReinstallConfirm = false
 
     var body: some View {
         Section {
@@ -184,6 +185,16 @@ private struct FirmwareSection: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Keep MetaWear open with the board nearby and powered until the update finishes. The board restarts automatically when it's done.")
+        }
+        .confirmationDialog("Reinstall current firmware?",
+                            isPresented: $showReinstallConfirm,
+                            titleVisibility: .visible) {
+            Button("Reinstall", role: .destructive) {
+                Task { await viewModel.startUpdate(forceReinstall: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Reflashes the latest firmware even though the board is already up to date. On-board logs, macros, and settings are erased. Keep MetaWear open with the board nearby and powered until it finishes.")
         }
     }
 
@@ -211,6 +222,11 @@ private struct FirmwareSection: View {
             }
             Button("Check Again", systemImage: "arrow.triangle.2.circlepath") {
                 Task { await viewModel.checkForUpdate() }
+            }
+            // Recovery path: reflash the current firmware on a board that's
+            // misbehaving despite being up to date.
+            Button("Reinstall Firmware", systemImage: "arrow.counterclockwise.circle") {
+                showReinstallConfirm = true
             }
 
         case .updateAvailable(let build):
