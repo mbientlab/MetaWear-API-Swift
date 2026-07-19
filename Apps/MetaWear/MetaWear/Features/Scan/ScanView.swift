@@ -27,9 +27,17 @@ struct ScanView: View {
         }
     }
 
+    /// Section header in white — the original app set all its chrome in
+    /// white on the solid orange, and the default gray reads muddy on it.
+    private func brandHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white)
+    }
+
     private func content(now: Date) -> some View {
         List {
-            Section("Remembered") {
+            Section(header: brandHeader("Remembered")) {
                 if appStore.rememberedDevices.isEmpty {
                     Text("No remembered devices yet.")
                         .font(.footnote)
@@ -58,7 +66,7 @@ struct ScanView: View {
                 }
             }
 
-            Section("Nearby") {
+            Section(header: brandHeader("Nearby")) {
                 // A discovered peripheral is "nearby" only if it's actually
                 // ON AIR — an advertisement within the freshness window; the
                 // scanner's discovery cache is append-only, so without this a
@@ -105,7 +113,7 @@ struct ScanView: View {
             }
 
             if DemoMode.isEnabled {
-                Section("Demo") {
+                Section(header: brandHeader("Demo")) {
                     Button {
                         Task { await connect(to: appStore.demoDevice) }
                     } label: {
@@ -139,13 +147,17 @@ struct ScanView: View {
             }
         }
         .navigationTitle("MetaWear")
-        // Brand the scan column: hide the List's opaque background and put
-        // the glass mesh directly behind it. (The RootView-level background
-        // sits behind the split view, but the sidebar column composites its
-        // own background above it, so it must be applied here too.)
+        // Brand the scan column the way the original app did: a flat,
+        // full-bleed brand orange (the old connect screen was solid #FE9500
+        // with white chrome — no gradient, no motion). Hide the List's
+        // opaque background so the orange shows through; the rows keep
+        // their own glass material for contrast. (The RootView-level
+        // background sits behind the split view, but the sidebar column
+        // composites its own background above it, so it must be applied
+        // here too.)
         .scrollContentBackground(.hidden)
         .background {
-            GlassBackground()
+            Palette.accent
                 .ignoresSafeArea()
         }
         .toolbar {

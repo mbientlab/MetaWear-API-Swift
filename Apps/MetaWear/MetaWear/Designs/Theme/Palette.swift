@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum Palette {
-    static let accent = Color(red: 0.88, green: 0.50, blue: 0.13)   // brand orange — sampled from the original app icon (#E08020 family)
+    static let accent = Color(red: 0.996, green: 0.584, blue: 0.0)  // brand orange — sampled flat from the original app's connect screen (#FE9500)
     static let success = Color(red: 0.30, green: 0.70, blue: 0.55)  // soft teal-green
     static let warning = Color(red: 0.93, green: 0.74, blue: 0.20)  // gold — pushed toward yellow so it reads apart from the orange accent
     static let danger = Color(red: 0.90, green: 0.40, blue: 0.45)   // softened coral
