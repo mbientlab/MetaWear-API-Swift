@@ -849,10 +849,16 @@ public actor MetaWearDevice {
                 return stream
             }
 
-            // Readout: [0x0B, 0x06, n_entries(4 LE), n_notify(4 LE)]
-            // n_notify = 0 means one progress update per page.
+            // Readout: [0x0B, 0x06, n_entries(4 LE), notify_delta(4 LE)]
+            // The delta is "send a 0x08 progress notification every N entries
+            // transferred" (spec, Logging 0x06). A delta of 0 disables
+            // intermediate progress ENTIRELY — the firmware then sends only
+            // the final remaining==0 notice, which made the download bar jump
+            // 0 → 100 with nothing in between. Aim for ~100 updates across
+            // the download, floor 1 so tiny logs still progress.
+            let notifyDelta = max(1, nEntries / 100)
             let cmd = MWPacket.command(.logging, 0x06,
-                                       MWPacketParser.le32(nEntries) + MWPacketParser.le32(0))
+                                       MWPacketParser.le32(nEntries) + MWPacketParser.le32(notifyDelta))
             try await proto.write(cmd)
 
             let (stream, continuation) = AsyncThrowingStream<Download<[RawLogEntry]>, Error>.makeStream()
