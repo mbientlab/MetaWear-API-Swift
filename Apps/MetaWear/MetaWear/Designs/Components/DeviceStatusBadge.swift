@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum DeviceConnectionStatus: Equatable {
-    case connected
+    case connected(rssi: Int?)
     case connecting
     case available(rssi: Int?)
     case offline
@@ -12,8 +12,29 @@ struct DeviceStatusBadge: View {
 
     var body: some View {
         switch status {
-        case .connected:
-            label("Connected", systemImage: "circle.fill", tint: Palette.success)
+        case .connected(let rssi):
+            // Live link quality rides inside the badge: boards stop
+            // advertising once connected, so this RSSI comes from the
+            // AppStore's connection poll, not from advertisements.
+            HStack(spacing: 6) {
+                Image(systemName: "circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(Palette.success)
+                Text("Connected")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Palette.success)
+                if let rssi {
+                    RSSIBars(dBm: rssi)
+                    Text("\(rssi) dBm")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(Palette.success)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Palette.success.opacity(0.15)))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(rssi.map { "Connected, signal \($0) dBm" } ?? "Connected")
         case .connecting:
             HStack(spacing: 6) {
                 ProgressView()

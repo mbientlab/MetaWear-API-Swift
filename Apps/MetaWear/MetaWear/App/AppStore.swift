@@ -30,6 +30,13 @@ final class AppStore {
     var connectionState: DeviceState = .disconnected
     var lastError: AppError?
 
+    /// Live RSSI of the active connection, polled every 3 s. `nil` when
+    /// disconnected or before the first read completes. Boards stop
+    /// advertising once connected, so `scanner.advertisementRSSI` freezes —
+    /// this poll is the only live signal source for a connected board.
+    private(set) var connectedRSSI: Int?
+    @ObservationIgnored private var rssiPollTask: Task<Void, Never>?
+
     var rememberedDevices: [RememberedDevice] = []
     var pendingLogSessions: [LogSessionRecord] = []
 
@@ -115,6 +122,7 @@ final class AppStore {
             }
             connectionState = await device.state
             connectingDeviceID = nil
+            startRSSIPolling(for: device)
             await rememberDevice(device)
         } catch {
             // Same staleness rule on the failure path: only reset shared
@@ -382,6 +390,7 @@ final class AppStore {
     private func handleUnexpectedDisconnect(deviceID: UUID, error: Error) {
         // Ignore stale callbacks from a device we've since moved away from.
         guard activeDeviceID == deviceID else { return }
+        stopRSSIPolling()
         connectionState = .disconnected
         activeDevice = nil
         activeDeviceID = nil
@@ -391,10 +400,35 @@ final class AppStore {
 
     func disconnect() async {
         guard let device = activeDevice else { return }
+        stopRSSIPolling()
         try? await device.disconnect()
         connectionState = .disconnected
         activeDevice = nil
         activeDeviceID = nil
+    }
+
+    // MARK: - Connected-RSSI polling
+
+    private func startRSSIPolling(for device: MetaWearDevice) {
+        stopRSSIPolling()
+        rssiPollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.activeDeviceID == device.identifier else { return }
+                // Best-effort: a failed read (mid-teardown, DFU handoff)
+                // just leaves the last value; the poller is cancelled by
+                // every disconnect path.
+                if let rssi = try? await device.readRSSI(), !Task.isCancelled {
+                    self.connectedRSSI = rssi
+                }
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    private func stopRSSIPolling() {
+        rssiPollTask?.cancel()
+        rssiPollTask = nil
+        connectedRSSI = nil
     }
 
     func forget(_ remembered: RememberedDevice) {

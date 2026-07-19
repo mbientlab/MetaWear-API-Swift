@@ -10,8 +10,6 @@ import MetaWear
 @MainActor
 final class ScannerViewModel {
     private let scanner: MetaWearScanner
-    var rssi: [UUID: Int] = [:]
-    private var rssiTasks: [UUID: Task<Void, Never>] = [:]
 
     init(scanner: MetaWearScanner) {
         self.scanner = scanner
@@ -29,35 +27,13 @@ final class ScannerViewModel {
     }
 
     func startScan() { scanner.startScan() }
-    func stopScan() {
-        scanner.stopScan()
-        rssiTasks.values.forEach { $0.cancel() }
-        rssiTasks.removeAll()
-    }
+    func stopScan() { scanner.stopScan() }
 
     func advertisedName(for id: UUID) -> String? {
         scanner.advertisedNames[id]
     }
 
-    func beginRSSIPolling(for device: MetaWearDevice) {
-        let id = device.identifier
-        rssiTasks[id]?.cancel()
-        rssiTasks[id] = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                do {
-                    let value = try await device.readRSSI()
-                    guard !Task.isCancelled else { return }
-                    self?.rssi[id] = value
-                } catch {
-                    return
-                }
-                try? await Task.sleep(for: .seconds(3))
-            }
-        }
-    }
-
-    func stopRSSIPolling(for id: UUID) {
-        rssiTasks[id]?.cancel()
-        rssiTasks.removeValue(forKey: id)
-    }
+    // Connected-state RSSI polling lives in AppStore (`connectedRSSI`): the
+    // connection lifecycle is owned there, and a connected board stops
+    // advertising, so scan-side RSSI has nothing to say about it.
 }

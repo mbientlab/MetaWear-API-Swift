@@ -173,7 +173,7 @@ struct ScanView: View {
         if appStore.activeDeviceID == uuid,
            appStore.connectionState != .disconnected,
            appStore.connectingDeviceID != uuid {
-            return .connected
+            return .connected(rssi: appStore.connectedRSSI)
         }
         if appStore.connectingDeviceID == uuid {
             return .connecting

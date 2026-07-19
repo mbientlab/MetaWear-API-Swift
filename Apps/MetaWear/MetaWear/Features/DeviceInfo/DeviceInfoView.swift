@@ -20,6 +20,18 @@ struct DeviceInfoView: View {
                     LabeledContent("Battery") {
                         BatteryPill(battery: viewModel.battery)
                     }
+                    LabeledContent("Signal") {
+                        if let rssi = appStore.connectedRSSI {
+                            HStack(spacing: 6) {
+                                RSSIBars(dBm: rssi)
+                                Text("\(rssi) dBm")
+                                    .font(.body.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Text("—").foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 // List every module the SDK knows about. Present modules
