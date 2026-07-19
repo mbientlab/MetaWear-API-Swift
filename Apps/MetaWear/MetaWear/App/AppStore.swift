@@ -431,6 +431,21 @@ final class AppStore {
         connectedRSSI = nil
     }
 
+    /// Rename the synced record for a board immediately. Without this,
+    /// the record's name only refreshes on a future reconnect after fresh
+    /// advertisements — the rename would look like it did nothing, and the
+    /// user's other devices wouldn't see the new name until then either.
+    func renameRememberedDevice(peripheralUUID: UUID, mac: String?, to name: String) {
+        let record = rememberedDevices.first {
+            ($0.macAddress != nil && $0.macAddress == mac)
+                || $0.peripheralUUID == peripheralUUID
+        }
+        guard let record, record.name != name else { return }
+        record.name = name
+        try? containers.cloud.mainContext.save()
+        refreshRememberedDevices()
+    }
+
     func forget(_ remembered: RememberedDevice) {
         let context = containers.cloud.mainContext
         context.delete(remembered)

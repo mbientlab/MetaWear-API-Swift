@@ -170,6 +170,17 @@ public final class MetaWearScanner {
         }
     }
 
+    /// Override the cached advertised name for `uuid`.
+    ///
+    /// For rename flows: after `MWSettings.SetDeviceName` the cache is
+    /// KNOWN-stale — a connected board doesn't advertise, so no observation
+    /// will correct it until after disconnect. The app injects the expected
+    /// name so UI keyed off this cache updates immediately; the next real
+    /// advertisement reconciles it with the truth.
+    public func noteAdvertisedName(_ name: String, for uuid: UUID) {
+        advertisedNames[uuid] = name
+    }
+
     /// Forget the cached advertised name for a UUID so the next scan must
     /// observe a fresh advertisement before `advertisedNames[uuid]` is
     /// repopulated. Used by verification code that needs to prove a rename

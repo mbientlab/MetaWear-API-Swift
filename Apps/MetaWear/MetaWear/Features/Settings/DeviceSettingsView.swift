@@ -21,13 +21,17 @@ struct DeviceSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Rename") {
+            Section {
                 TextField("Device name", text: $draftName)
                     .textInputAutocapitalization(.never)
                 Button("Save", systemImage: "checkmark") {
                     Task { await viewModel?.rename(to: draftName) }
                 }
-                .disabled(draftName.isEmpty)
+                .disabled(!MWSettings.isNameValid(draftName))
+            } header: {
+                Text("Rename")
+            } footer: {
+                Text("Up to \(MWSettings.maxDeviceNameLength) characters: letters, numbers, spaces, _ and -. The name updates in the app immediately and on the board's next advertisement.")
             }
 
             if let firmware {
@@ -110,6 +114,16 @@ struct DeviceSettingsView: View {
         }
         .alert(item: $clearLogError) { err in
             Alert(title: Text("Clear logs failed"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
+        }
+        // Rename / factory-reset errors were previously swallowed — the
+        // view model recorded them but nothing here presented them.
+        .alert(item: Binding(
+            get: { viewModel?.lastError },
+            set: { viewModel?.lastError = $0 }
+        )) { err in
+            Alert(title: Text("Operation failed"),
                   message: Text(err.message),
                   dismissButton: .default(Text("OK")))
         }
