@@ -89,7 +89,7 @@ struct DeviceSettingsView: View {
             // hidden for the simulated Demo Mode board: there's nothing to
             // flash, and the catalog lookup would just error on its synthetic
             // firmware revision.
-            if firmware == nil, device.identifier != DemoBLETransport.deviceIdentifier {
+            if firmware == nil, !DemoMode.isDemoID(device.identifier) {
                 firmware = FirmwareUpdateViewModel(device: device, appStore: appStore)
                 await firmware?.loadCurrentVersion()
             }

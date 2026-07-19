@@ -164,11 +164,22 @@ public final class MetaWearScanner {
                 ) else { continue }
                 guard self.discoveredDevices[id] == nil else { continue }
                 mwLog("[Scanner] new MetaWear device: \(id)")
-                let transport = CoreBluetoothPeripheralTransport(
-                    identifier: id,
-                    centralManager: self.centralManager
-                )
-                self.discoveredDevices[id] = MetaWearDevice(identifier: id, transport: transport)
+                if let cached = self.knownDevices.removeValue(forKey: id) {
+                    // Promote the known-peripheral instance instead of minting
+                    // a twin. Two MetaWearDevice instances for one UUID means
+                    // two transports fighting over MWCentralManager's per-UUID
+                    // callback routing — the loser's connection goes dark (its
+                    // didDisconnect is never delivered). With several
+                    // remembered boards reconnecting while a scan runs, that
+                    // race would be routine.
+                    self.discoveredDevices[id] = cached
+                } else {
+                    let transport = CoreBluetoothPeripheralTransport(
+                        identifier: id,
+                        centralManager: self.centralManager
+                    )
+                    self.discoveredDevices[id] = MetaWearDevice(identifier: id, transport: transport)
+                }
             }
         }
     }
@@ -232,7 +243,8 @@ public final class MetaWearScanner {
     /// connect to such peripherals via `retrievePeripherals(withIdentifiers:)`
     /// inside `MWCentralManager.requestConnect`. Repeated calls return the
     /// same instance, and if the scanner subsequently discovers the same
-    /// UUID on air the live `discoveredDevices` entry takes precedence.
+    /// UUID on air that SAME instance is promoted into `discoveredDevices`
+    /// — callers never observe two `MetaWearDevice` instances for one UUID.
     public func device(forKnownIdentifier identifier: UUID) -> MetaWearDevice {
         if let existing = discoveredDevices[identifier] { return existing }
         if let cached = knownDevices[identifier] { return cached }
