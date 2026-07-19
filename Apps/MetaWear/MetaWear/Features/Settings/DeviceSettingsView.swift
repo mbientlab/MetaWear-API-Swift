@@ -5,6 +5,7 @@ import MetaWearFirmware
 
 struct DeviceSettingsView: View {
     @Environment(AppStore.self) private var appStore
+    @Environment(\.dismiss) private var dismiss
     @State private var viewModel: DeviceViewModel?
     @State private var firmware: FirmwareUpdateViewModel?
     @State private var draftName: String = ""
@@ -25,7 +26,14 @@ struct DeviceSettingsView: View {
                 TextField("Device name", text: $draftName)
                     .textInputAutocapitalization(.never)
                 Button("Save", systemImage: "checkmark") {
-                    Task { await viewModel?.rename(to: draftName) }
+                    Task {
+                        // Pop back to the device page on success — the new
+                        // name in its header IS the confirmation. On failure
+                        // stay put; the lastError alert explains.
+                        if await viewModel?.rename(to: draftName) == true {
+                            dismiss()
+                        }
+                    }
                 }
                 .disabled(!MWSettings.isNameValid(draftName))
             } header: {

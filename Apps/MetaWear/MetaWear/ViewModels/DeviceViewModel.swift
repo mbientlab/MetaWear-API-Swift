@@ -69,7 +69,11 @@ final class DeviceViewModel {
         }
     }
 
-    func rename(to newName: String) async {
+    /// - Returns: `true` on success, so callers can navigate to where the
+    ///   new name is visible; `false` leaves the user in place with the
+    ///   error surfaced via `lastError`.
+    @discardableResult
+    func rename(to newName: String) async -> Bool {
         do {
             try await device.send(MWSettings.SetDeviceName(validating: newName))
             // Make the rename VISIBLE immediately. Every displayed name comes
@@ -81,8 +85,10 @@ final class DeviceViewModel {
                 peripheralUUID: device.identifier, mac: macAddress, to: newName
             )
             await refreshMACBroadcastAfterRename(newName)
+            return true
         } catch {
             lastError = AppError(error: error)
+            return false
         }
     }
 
