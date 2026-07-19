@@ -53,15 +53,6 @@ public enum MWModel: Sendable, Equatable {
         }
     }
 
-    /// Compact label for space-constrained UI (device headers, pills).
-    public var shortName: String {
-        switch self {
-        case .motionRL:               return "MMRL"
-        case .motionS:                return "MMS"
-        case .unknown(let n):         return n
-        }
-    }
-
     // MARK: Capability
 
     /// MMS has larger on-board flash and requires `flush_page` before log download.
