@@ -17,6 +17,10 @@ public struct ScanResult: Sendable {
     /// sub-type byte (`0x02`), length (`0x15`), 16-byte UUID, 2-byte major, 2-byte
     /// minor, and 1-byte measured-RSSI reference.
     public let manufacturerData: Data?
+    /// Advertised service UUID strings (`CBAdvertisementDataServiceUUIDsKey`).
+    /// MetaWear boards advertise their custom service UUID here regardless of
+    /// how they've been renamed — the scanner's admission rule relies on it.
+    public let serviceUUIDs: [String]
 }
 
 // MARK: - BLE Transport protocol

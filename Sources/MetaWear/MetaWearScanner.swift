@@ -157,8 +157,11 @@ public final class MetaWearScanner {
                     }
                 }
                 mwLogVerbose("[Scanner] discovered: \(id) name='\(name)'")
-                // Accept only MetaWear peripherals (name starts with "MetaWear").
-                guard name.hasPrefix("MetaWear") else { continue }
+                guard Self.isMetaWearAdvertisement(
+                    name: name,
+                    serviceUUIDs: result.serviceUUIDs,
+                    manufacturerData: result.manufacturerData
+                ) else { continue }
                 guard self.discoveredDevices[id] == nil else { continue }
                 mwLog("[Scanner] new MetaWear device: \(id)")
                 let transport = CoreBluetoothPeripheralTransport(
@@ -168,6 +171,33 @@ public final class MetaWearScanner {
                 self.discoveredDevices[id] = MetaWearDevice(identifier: id, transport: transport)
             }
         }
+    }
+
+    /// Whether an advertisement belongs to a MetaWear board running
+    /// application firmware, by any of three signals:
+    ///   1. The default local-name prefix ("MetaWear").
+    ///   2. The MetaWear service UUID — boards advertise it regardless of
+    ///      how they've been RENAMED, so a board called "bob" still counts.
+    ///   3. MbientLab manufacturer data (the MAC broadcast) — covers a
+    ///      configured board whose ad packet reached us without the
+    ///      service-UUID structure.
+    ///
+    /// MetaBoot-mode boards match none of these (name "MetaBoot", Nordic
+    /// DFU service) and stay excluded on purpose — the normal connect flow
+    /// can't talk to a bootloader.
+    nonisolated static func isMetaWearAdvertisement(
+        name: String,
+        serviceUUIDs: [String],
+        manufacturerData: Data?
+    ) -> Bool {
+        if name.hasPrefix("MetaWear") { return true }
+        let service = MWUUIDs.service.uuidString
+        if serviceUUIDs.contains(where: {
+            $0.caseInsensitiveCompare(service) == .orderedSame
+        }) { return true }
+        if let mfg = manufacturerData,
+           MWMACAdvertisement.mac(fromManufacturerData: mfg) != nil { return true }
+        return false
     }
 
     /// Override the cached advertised name for `uuid`.
