@@ -253,12 +253,45 @@ final class DownloadViewModel {
     /// matching `MWPersistable` type. Fuser signals (two outputs per entry)
     /// only persist the first output for now; rare enough that we can
     /// revisit if a user actually exercises it.
+    /// Human label for a recovered anonymous signal, in the SAME vocabulary
+    /// as the standard logging labels ("Accelerometer · …", "Fusion ·
+    /// Quaternion · …"). This matters beyond cosmetics: `CSVExporter.
+    /// streamingTag(forLabel:)` derives the export filename's sensor tag
+    /// from the label's leading display name — the old "Unknown ·
+    /// acceleration" label fell through to the generic persistence-kind
+    /// tag, so an accelerometer CSV said nothing about the accelerometer.
+    static func label(forAnonymousIdentifier identifier: String) -> String {
+        let root = identifier.split(separator: ":").first.map(String.init) ?? identifier
+        let base = root.split(separator: "[").first.map(String.init) ?? root
+        let head: String
+        switch base {
+        case "acceleration":               head = "Accelerometer"
+        case "angular-velocity":           head = "Gyroscope"
+        case "magnetic-field":             head = "Magnetometer"
+        case "temperature":                head = "Temperature"
+        case "quaternion":                 head = "Fusion · Quaternion"
+        case "euler-angles":               head = "Fusion · Euler Angles"
+        case "gravity":                    head = "Fusion · Gravity"
+        case "linear-acceleration":        head = "Fusion · Linear Acceleration"
+        case "corrected-acceleration":     head = "Fusion · Corrected Acceleration"
+        case "corrected-angular-velocity": head = "Fusion · Corrected Angular Velocity"
+        case "corrected-magnetic-field":   head = "Fusion · Corrected Magnetic Field"
+        default:                           return "Unknown · \(identifier)"
+        }
+        // A processor chain ("acceleration:rms?id=0:…") is real information
+        // about what the board was computing — keep it visible. Plain
+        // signals just get the provenance marker.
+        return identifier.contains(":")
+            ? "\(head) · \(identifier)"
+            : "\(head) · Recovered"
+    }
+
     private func save(
         anonymousSignal signal: MWAnonymousSignal,
         samples: [MWLoggedSample<[MWAnonymousSignal.Output]>],
         info: MWDeviceInformation
     ) async throws -> MWSessionSnapshot? {
-        let label = "Unknown · \(signal.identifier)"
+        let label = Self.label(forAnonymousIdentifier: signal.identifier)
         guard let firstOutput = samples.first?.value.first else { return nil }
 
         switch firstOutput {
