@@ -102,23 +102,26 @@ struct DeviceDetailView: View {
 
     private var activityGrid: some View {
         LazyVGrid(columns: [.init(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
-            activityTile("Live Stream", systemImage: "chart.line.uptrend.xyaxis", tint: Palette.info, pane: .sensorConfig)
-            activityTile("Logging", systemImage: "record.circle", tint: Palette.accent, pane: .logSession)
-            activityTile("Controls", systemImage: "slider.horizontal.3", tint: Palette.success, pane: .controls)
-            activityTile("Device Info", systemImage: "info.circle", tint: Palette.info, pane: .deviceInfo)
-            activityTile("Settings", systemImage: "gearshape", tint: Palette.warning, pane: .settings)
-            activityTile("Session History", systemImage: "clock.arrow.circlepath", tint: Palette.accent, pane: .sessionHistory)
+            activityTile("Live Stream", systemImage: "chart.line.uptrend.xyaxis", pane: .sensorConfig)
+            activityTile("Logging", systemImage: "record.circle", pane: .logSession)
+            activityTile("Controls", systemImage: "slider.horizontal.3", pane: .controls)
+            activityTile("Device Info", systemImage: "info.circle", pane: .deviceInfo)
+            activityTile("Settings", systemImage: "gearshape", pane: .settings)
+            activityTile("Session History", systemImage: "clock.arrow.circlepath", pane: .sessionHistory)
         }
     }
 
-    private func activityTile(_ title: String, systemImage: String, tint: Color, pane: DeviceFeaturePane) -> some View {
+    private func activityTile(_ title: String, systemImage: String, pane: DeviceFeaturePane) -> some View {
         Button {
             path.append(pane)
         } label: {
             VStack(alignment: .leading, spacing: 12) {
                 Image(systemName: systemImage)
                     .font(.title)
-                    .foregroundStyle(tint)
+                    // One brand color across the whole grid — the mixed
+                    // per-tile palette predates the orange accent and read
+                    // as noise next to it.
+                    .foregroundStyle(Palette.accent)
                     .accessibilityHidden(true)
                 Text(title)
                     .font(.headline)
