@@ -396,6 +396,9 @@ struct GroupLoggingView: View {
             Image(systemName: "record.circle.fill").foregroundStyle(Palette.danger)
         case .saved:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.success)
+        case .savedWithIssues:
+            Image(systemName: "checkmark.circle.trianglebadge.exclamationmark")
+                .foregroundStyle(Palette.warning)
         case .skipped:
             Image(systemName: "minus.circle").foregroundStyle(Palette.warning)
         case .failed:
@@ -412,6 +415,8 @@ struct GroupLoggingView: View {
         case .stopping:             return "Stopping…"
         case .downloading:          return "Downloading…"
         case .saved(let count):     return "Saved \(count) session\(count == 1 ? "" : "s")"
+        case .savedWithIssues(let count, let warning):
+            return "Saved \(count) session\(count == 1 ? "" : "s") · \(warning)"
         case .skipped(let reason):  return reason
         case .failed(let message):  return message
         }

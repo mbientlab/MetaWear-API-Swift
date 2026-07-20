@@ -35,6 +35,10 @@ final class GroupCaptureCoordinator {
         case downloading
         /// Collect pass succeeded; the payload is the saved session count.
         case saved(Int)
+        /// The drain succeeded and SOME sessions saved, but not all records
+        /// decoded. No Retry is offered: the readout already consumed the
+        /// board's entries, so a re-download cannot recover the rest.
+        case savedWithIssues(Int, String)
         /// The board was left untouched, with the reason (out of range,
         /// nothing to download, …). Not an error: absent boards can be
         /// collected individually later via the normal per-board flow.
@@ -43,7 +47,7 @@ final class GroupCaptureCoordinator {
 
         var isTerminal: Bool {
             switch self {
-            case .logging, .saved, .skipped, .failed: return true
+            case .logging, .saved, .savedWithIssues, .skipped, .failed: return true
             default: return false
             }
         }
@@ -131,6 +135,15 @@ final class GroupCaptureCoordinator {
                 setPhase(id, .connecting)
                 let ownsConnection = try await connectIfNeeded(member.device)
                 setPhase(id, .starting)
+                // Boards reaching here have no local claim on their flash
+                // (pending boards were skipped above). Field evidence: MMS
+                // boards carrying stale trigger slots from abandoned
+                // sessions read LOG_LENGTH 0 FOREVER after logging (flush
+                // and all) — the same boards download fine after a clear.
+                // Start every group session on a clean slate. This also
+                // wipes unclaimed foreign data by design: the user just
+                // chose to record fresh on this board.
+                try? await member.device.clearLog()
                 let vm = LogSessionViewModel(device: member.device, containers: containers)
                 await vm.start(selections, groupID: groupID)
                 if case .running = vm.phase {
@@ -237,10 +250,13 @@ final class GroupCaptureCoordinator {
         switch download.phase {
         case .ready(let snapshots, let warning):
             if let warning {
-                // Partial success (some records undecodable, board data
-                // kept, …) must not render a green check — the warning is
-                // the actionable truth and the board needs a retry.
-                setPhase(id, .failed(warning))
+                // Partial success must not render an unqualified green
+                // check — but when sessions DID save, it isn't a failure
+                // either, and a Retry can't help (the drain consumed the
+                // board's entries).
+                setPhase(id, snapshots.isEmpty
+                    ? .failed(warning)
+                    : .savedWithIssues(snapshots.count, warning))
             } else {
                 setPhase(id, .saved(snapshots.count))
             }

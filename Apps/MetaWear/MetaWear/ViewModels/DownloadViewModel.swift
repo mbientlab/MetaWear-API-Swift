@@ -124,7 +124,7 @@ final class DownloadViewModel {
         if keptBoardData {
             phase = .ready(
                 snapshots: snapshots,
-                warning: "Some log data could not be decoded. Board data was kept so you can retry Download or clear it from Settings."
+                warning: "Some sensors' data could not be decoded; everything decodable was saved."
             )
             return
         }
