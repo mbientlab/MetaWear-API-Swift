@@ -165,8 +165,21 @@ final class GroupCaptureCoordinator {
                     if await confirmEntriesLanding(on: member.device) {
                         // Best-effort: the heartbeat is a courtesy
                         // indicator — an LED hiccup must not fail a
-                        // successfully started board.
+                        // successfully started board. The immediate play
+                        // covers the connected window; the firmware stops
+                        // LED playback the moment the link drops, so the
+                        // BOARD re-arms it via disconnect events. Their
+                        // ids are stamped onto the records so the collect
+                        // pass can tear them down even after an app
+                        // restart — an un-removed pair would relight the
+                        // LED on every future disconnect, forever.
                         try? await member.device.setLED(red: Self.recordingHeartbeat)
+                        let eventIDs = await armDisconnectHeartbeat(on: member.device)
+                        if !eventIDs.isEmpty,
+                           let json = Self.encodeEventIDs(eventIDs) {
+                            vm.activeRecords.forEach { $0.ledEventIDsJSON = json }
+                            try? containers.local.mainContext.save()
+                        }
                         setPhase(id, .logging)
                     } else {
                         // The session is doomed — the sensors run but the
@@ -232,6 +245,14 @@ final class GroupCaptureCoordinator {
         // if the download below fails. Best-effort, like the set.
         try? await member.device.stopLED()
         let pending = appStore.pendingLogSessions.filter { $0.deviceID == id }
+        // Tear down the disconnect-event heartbeat armed at start —
+        // without this the board relights its LED on EVERY disconnect.
+        if let json = pending.compactMap(\.ledEventIDsJSON).first,
+           let eventIDs = Self.decodeEventIDs(json) {
+            for eventID in eventIDs {
+                try? await member.device.removeEvent(MWEvent(id: eventID))
+            }
+        }
         let running = pending.filter { $0.status == .running }
 
         if !running.isEmpty {
@@ -344,6 +365,39 @@ final class GroupCaptureCoordinator {
             }
         }
         return true
+    }
+
+    /// Record the LED heartbeat into the board's DISCONNECT EVENT so the
+    /// blinking survives the link drop: two events fire on disconnect —
+    /// re-set the red pattern, then play. Requires Settings revision ≥ 2
+    /// (the disconnect signal's floor); best-effort like every LED touch.
+    /// - Returns: the board-assigned event ids (for collect-time removal),
+    ///   empty when arming was skipped or failed.
+    private func armDisconnectHeartbeat(on device: MetaWearDevice) async -> [UInt8] {
+        guard (await device.modules[.settings]?.revision ?? 0) >= 2 else { return [] }
+        do {
+            let pattern = try await device.createEvent(
+                source: .disconnected(),
+                action: try MWEventAction(
+                    command: MWLED.SetPattern(color: .red, pattern: Self.recordingHeartbeat)
+                )
+            )
+            let play = try await device.createEvent(
+                source: .disconnected(),
+                action: try MWEventAction(command: MWLED.Play())
+            )
+            return [pattern.id, play.id]
+        } catch {
+            return []
+        }
+    }
+
+    private static func encodeEventIDs(_ ids: [UInt8]) -> String? {
+        (try? JSONEncoder().encode(ids)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    private static func decodeEventIDs(_ json: String) -> [UInt8]? {
+        try? JSONDecoder().decode([UInt8].self, from: Data(json.utf8))
     }
 
     /// Poll the live entry count until it rises — proof the board is

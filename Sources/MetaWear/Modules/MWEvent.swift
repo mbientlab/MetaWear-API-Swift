@@ -24,6 +24,13 @@ import Foundation
 public struct MWEvent: Sendable {
     /// Board-assigned ID used for removal.
     public let id: UInt8
+
+    /// Reconstruct a handle from a persisted id — event bindings outlive
+    /// app sessions (they live on the board), so callers that stored an id
+    /// need a way back to a removable handle.
+    public init(id: UInt8) {
+        self.id = id
+    }
 }
 
 // MARK: - MWEventSource

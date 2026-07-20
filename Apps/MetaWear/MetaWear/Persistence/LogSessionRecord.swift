@@ -23,6 +23,12 @@ final class LogSessionRecord {
     /// logging is started on several boards together so the downloaded
     /// `MWSessionRecord`s can inherit it. Nil for solo sessions.
     var groupID: UUID?
+    /// JSON-encoded `[UInt8]` of on-board disconnect-event ids arming the
+    /// LED recording heartbeat — the board re-lights its LED on every
+    /// disconnect until these are removed, so the collect pass MUST be
+    /// able to find them even across app restarts. Nil for solo sessions
+    /// and boards where arming failed.
+    var ledEventIDsJSON: String?
 
     var status: Status {
         get { Status(rawValue: statusRaw) ?? .running }
