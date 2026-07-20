@@ -37,7 +37,13 @@ struct RootView: View {
                         // transition. In regular (iPad) the sidebar is
                         // already showing alongside, so the detail just
                         // sits empty rather than nagging the user.
+                        // Safety net: if this pane ever DOES become the
+                        // visible column in compact (the onChange's flip
+                        // can be swallowed mid-transition), push focus
+                        // back to the sidebar. Harmless in regular width
+                        // — preferredCompactColumn only affects compact.
                         Color.clear
+                            .onAppear { preferredColumn = .sidebar }
                     }
                 }
                 .navigationDestination(for: DeviceFeaturePane.self) { pane in
@@ -62,7 +68,18 @@ struct RootView: View {
             // (e.g. a foreignDownload pushed for the previous board) must
             // not resolve against the next one.
             path = NavigationPath()
-            preferredColumn = newID == nil ? .sidebar : .detail
+            if newID == nil {
+                // Deferred one tick: flipping the compact column in the
+                // SAME transaction as the path reset + the detail content
+                // swapping to the blank pane gets swallowed by
+                // NavigationSplitView — compact users ended up stranded on
+                // an empty detail page with only a Back button (field bug:
+                // tap X to disconnect → blank screen instead of the scan
+                // list).
+                Task { @MainActor in preferredColumn = .sidebar }
+            } else {
+                preferredColumn = .detail
+            }
         }
         .overlay {
             if isConnecting {
