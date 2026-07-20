@@ -197,7 +197,7 @@ struct LogSessionView: View {
                 Task {
                     await viewModel?.start(selections)
                     // Refresh the AppStore's pending-sessions cache so the
-                    // global `LoggingPill` becomes visible immediately.
+                    // pending-log badges appear immediately.
                     appStore.refreshPendingLogSessions()
                 }
             }

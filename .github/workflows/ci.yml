@@ -7,3 +7,18 @@ jobs:
       - uses: actions/checkout@v4
       - run: swift build --build-tests
       - run: swift test --filter MetaWearTests   # skip hardware tests in CI
+  # The app target's unit tests (coordinator E2E against the demo fleet,
+  # history grouping, foreign-log decisions, …) were invisible to CI —
+  # only the SPM suites ran. The app requires the iOS 26 SDK, hence the
+  # newer runner image.
+  app-tests:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: >
+          xcodebuild test
+          -project Apps/MetaWear/MetaWearApp.xcodeproj
+          -scheme MetaWearApp
+          -destination 'platform=iOS Simulator,name=iPhone 17'
+          -only-testing:MetaWearAppTests
+          CODE_SIGNING_ALLOWED=NO

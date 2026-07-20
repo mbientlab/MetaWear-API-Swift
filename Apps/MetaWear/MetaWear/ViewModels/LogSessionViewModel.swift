@@ -167,7 +167,7 @@ final class LogSessionViewModel {
         // Per-record try/catch — a single failed `stopOne` (BLE hiccup,
         // unexpected board state) used to abort the loop, leaving the
         // remaining records' `status` stuck at `.running` and the global
-        // `LoggingPill` ticking forever. We always flip the status to
+        // pending-log badges stuck forever. We always flip the status to
         // `.stopped` even when the BLE command threw, because:
         //   - the user explicitly asked the session to stop, and
         //   - the captured data is still on the board for download.
