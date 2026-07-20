@@ -157,7 +157,14 @@ struct DeviceSettingsView: View {
             try await device.clearLog()
             deleteLocalPendingRecords(for: device.identifier)
             appStore.refreshPendingLogSessions()
-            await refreshLogStats()
+            // Do NOT re-read the board here: clearLog just waited for the
+            // firmware's drop-completion handshake, so the truth IS zero —
+            // but the MMS reports a sentinel LOG_LENGTH (often 1) for up
+            // to ~60 s post-clear while GC settles, which made this screen
+            // look like the clear hadn't worked. The next screen visit
+            // re-reads naturally.
+            logEntryCount = 0
+            activeLoggerCount = 0
         } catch {
             clearLogError = AppError(error: error)
         }
