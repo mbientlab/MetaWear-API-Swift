@@ -199,6 +199,13 @@ public actor DemoBLETransport: BLETransport {
             storedEntryCount = 0
             loggingStarted = loggingEnabled ? .now : nil
             if register == 0x0A { loggers.removeAll(); nextLoggerID = 0 }
+            // Firmware signals Drop Entries completion with a page-completed
+            // notification (spec: 0x0D "sent … after the Drop Entries
+            // command completes") — clearLog waits for it on MMS-revision
+            // boards, and the demo reports MMS revision.
+            if register == 0x09, subscriptions.contains(.init(module: 0x0B, register: 0x0D)) {
+                emit([0x0B, 0x0D])
+            }
 
         // ---- Timer / Event / Macro allocation ----
         case (0x0C, 0x02):

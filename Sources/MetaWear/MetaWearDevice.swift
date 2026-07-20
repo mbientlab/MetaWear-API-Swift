@@ -1116,9 +1116,57 @@ public actor MetaWearDevice {
             throw MWError.invalidState("Device must be idle to clear the log")
         }
         try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))           // stop logging
+
+        // The drop is ASYNCHRONOUS on MMS NAND: it kicks off page garbage
+        // collection that grinds for seconds, and the firmware signals
+        // completion with a READOUT_PAGE_COMPLETED (0x0D) notification —
+        // the spec's register table: "sent … after the Drop Entries
+        // command completes". Arming a new session before that lands
+        // records NOTHING (field evidence: a machine-speed clear→start
+        // logged zero entries on both boards; the same boards logged fine
+        // after a human-paced clear). MMS-revision boards therefore wait
+        // for the completion, bounded — if a board never signals we
+        // proceed best-effort rather than wedge every caller.
+        let awaitCompletion = (modules[.logging]?.revision ?? 0) >= 3
+        var pageStream: AsyncThrowingStream<Data, Error>?
+        if awaitCompletion {
+            try await proto.write(MWPacket.command(.logging, 0x0D, [0x01]))
+            pageStream = await proto.subscribe(to: .logging, register: 0x0D)
+        }
+
         try await proto.write(MWPacket.command(.logging, 0x09, [0xFF, 0xFF, 0xFF, 0xFF]))
+
+        if let pageStream {
+            let completed = await Self.awaitFirstElement(of: pageStream, timeout: .seconds(30))
+            mwLog(completed
+                  ? "[Device] clearLog: drop completed"
+                  : "[Device] clearLog: drop completion TIMED OUT — proceeding")
+            await proto.unsubscribe(from: .logging, register: 0x0D)
+            try? await proto.write(MWPacket.command(.logging, 0x0D, [0x00]))
+        }
+
         try await proto.write(MWPacket.command(.logging, 0x0A, []))               // remove all loggers
         loggerRegistry.removeAll()
+    }
+
+    /// Wait for the first element of `stream`, bounded by `timeout`.
+    /// - Returns: true when an element arrived before the deadline.
+    private static func awaitFirstElement(
+        of stream: AsyncThrowingStream<Data, Error>, timeout: Duration
+    ) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                var iterator = stream.makeAsyncIterator()
+                return (try? await iterator.next()) != nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
     }
 
     /// Stop on-board logging sampling (`[0x0B, 0x01, 0x00]`) WITHOUT
