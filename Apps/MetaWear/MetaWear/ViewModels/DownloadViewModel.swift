@@ -89,7 +89,7 @@ final class DownloadViewModel {
         //    stream together; per-record dispatch happens after.
         let allEntries: [RawLogEntry]
         do {
-            allEntries = try await drainRawDownload()
+            allEntries = try await drainRawDownload(expectEntries: true)
         } catch {
             phase = .failed(message: error.localizedDescription)
             lastError = AppError(error: error)
@@ -187,7 +187,9 @@ final class DownloadViewModel {
                 return
             }
 
-            let entries = try await drainRawDownload()
+            let entries = try await drainRawDownload(
+                expectEntries: state.entryCount > 0 || state.isActivelyLogging
+            )
             guard let info = await device.deviceInfo else {
                 throw MWError.invalidState("Device info unavailable")
             }
@@ -227,8 +229,11 @@ final class DownloadViewModel {
 
     /// Drain `device.downloadLogs()` into a single accumulated entries array,
     /// updating `phase` with the percentage as the download progresses.
-    private func drainRawDownload() async throws -> [RawLogEntry] {
-        let stream = try await device.downloadLogs()
+    /// - Parameter expectEntries: the caller knows the board logged —
+    ///   passes through to the SDK's flush-settle logic so a slow NAND
+    ///   flush waits instead of yielding an instant empty download.
+    private func drainRawDownload(expectEntries: Bool = false) async throws -> [RawLogEntry] {
+        let stream = try await device.downloadLogs(expectEntries: expectEntries)
         var all: [RawLogEntry] = []
         var sawCompletion = false
         for try await chunk in stream {

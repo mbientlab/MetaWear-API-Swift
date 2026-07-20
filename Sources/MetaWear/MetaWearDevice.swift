@@ -607,6 +607,11 @@ public actor MetaWearDevice {
         // still needs its own stop + disable writes — otherwise the board
         // keeps sampling that sensor (and `downloadLogs` returns no entries
         // because the logger never sees a fresh session marker).
+        // Flush the in-RAM partial page WHILE logging is still enabled —
+        // the NAND write-cache flush is only known to be honoured with the
+        // module live; downloadLogs flushes again afterwards as belt and
+        // braces. No-op on non-MMS boards.
+        _ = try? await flushLogPage()
         try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))  // stop logging
         for cmd in loggable.stopCommands    where !cmd.isEmpty { try await proto.write(cmd) }
         for cmd in loggable.disableCommands where !cmd.isEmpty { try await proto.write(cmd) }
@@ -741,6 +746,7 @@ public actor MetaWearDevice {
         try? await stopTimer(timer)
         try? await removeTimer(timer)
         try? await removeEvent(MWEvent(id: handles.eventID))
+        _ = try? await flushLogPage()   // see MWLoggable overload
         try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))
         state = .idle
     }
@@ -804,7 +810,11 @@ public actor MetaWearDevice {
     /// data. We force-flush the active page here so that workflow shape always
     /// works without the caller having to remember `flushLogPage()`. The flush
     /// is a no-op on MMRL (logging revision < 3).
-    public func downloadLogs() async throws -> AsyncThrowingStream<Download<[RawLogEntry]>, Error> {
+    /// - Parameter expectEntries: pass true when the caller KNOWS the board
+    ///   logged (local records exist, or it reported itself logging) — a
+    ///   zero LOG_LENGTH then triggers a longer flush-settle wait instead of
+    ///   an instant empty download.
+    public func downloadLogs(expectEntries: Bool = false) async throws -> AsyncThrowingStream<Download<[RawLogEntry]>, Error> {
         mwLog("[Device] downloadLogs")
         guard case .idle = state else {
             throw MWError.invalidState("Device must be idle to download")
@@ -828,7 +838,7 @@ public actor MetaWearDevice {
             let pageStream     = await proto.subscribe(to: .logging, register: 0x0D)
 
             // Read entry count, then start the download
-            let nEntries = try await settledLogLength(afterFlush: didFlush)
+            let nEntries = try await settledLogLength(afterFlush: didFlush, expectEntries: expectEntries)
 
             // Empty log buffer: short-circuit. Issuing the readout with count=0
             // produces no `0x07` raw entries, no `0x0D` page-completed notice, and
@@ -1157,7 +1167,7 @@ public actor MetaWearDevice {
     /// Human-paced solo flows always masked the race with navigation delays
     /// between Stop and Download. Give the flush a head start, then poll
     /// until two consecutive reads agree (bounded, ~2 s worst case).
-    private func settledLogLength(afterFlush didFlush: Bool) async throws -> UInt32 {
+    private func settledLogLength(afterFlush didFlush: Bool, expectEntries: Bool) async throws -> UInt32 {
         func readLength() async throws -> UInt32 {
             let response = try await proto.read(.logging, 0x05)
             guard response.count >= 6 else {
@@ -1168,13 +1178,30 @@ public actor MetaWearDevice {
         guard didFlush else { return try await readLength() }
         try await Task.sleep(for: .milliseconds(300))
         var previous = try await readLength()
-        for _ in 0..<6 {
-            try await Task.sleep(for: .milliseconds(250))
+        mwLog("[Device] settledLogLength: read \(previous)")
+        var attempt = 0
+        while true {
+            attempt += 1
+            // Two consecutive agreeing reads normally settle it — but when
+            // the caller KNOWS the board logged (records exist / it reported
+            // itself logging), a stable ZERO means the NAND flush hasn't
+            // landed yet, not that the board is empty. Keep waiting (and
+            // periodically re-issue the flush; it has no ack) up to ~8 s
+            // before conceding — an empty download here reads as data loss
+            // to the user, so patience is the cheaper failure mode.
+            let expectingMore = expectEntries && previous == 0
+            let maxAttempts = expectingMore ? 10 : 6
+            guard attempt <= maxAttempts else { return previous }
+            if expectingMore, attempt.isMultiple(of: 3) {
+                mwLog("[Device] settledLogLength: re-issuing flush")
+                try await proto.write(MWPacket.command(.logging, 0x10, [0x01]))
+            }
+            try await Task.sleep(for: .milliseconds(expectingMore ? 750 : 250))
             let current = try await readLength()
-            if current == previous { return current }
+            mwLog("[Device] settledLogLength: read \(current)")
+            if current == previous, !(expectEntries && current == 0) { return current }
             previous = current
         }
-        return previous
     }
 
     // MARK: - Logger recovery
