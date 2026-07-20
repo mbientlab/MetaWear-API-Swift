@@ -26,6 +26,11 @@ struct SessionHistoryView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        .swipeActions(edge: .trailing) {
+                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                Task { await delete(snap) }
+                            }
+                        }
                     }
                 }
             }
@@ -41,6 +46,11 @@ struct SessionHistoryView: View {
         }
         .refreshable {
             await reload()
+        }
+        .alert(item: $loadError) { err in
+            Alert(title: Text("Session History"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
         }
     }
 
@@ -64,6 +74,20 @@ struct SessionHistoryView: View {
             snapshots = try await appStore.persistence.fetchAllSessions()
         } catch {
             loadError = AppError(error: error)
+        }
+    }
+
+    /// Standard swipe-to-delete: remove optimistically for instant UI,
+    /// then delete from the store (samples cascade). On failure the reload
+    /// resurrects the row and the alert explains — the row must never
+    /// vanish while the data survives.
+    private func delete(_ snapshot: MWSessionSnapshot) async {
+        snapshots.removeAll { $0.id == snapshot.id }
+        do {
+            try await appStore.persistence.deleteSession(id: snapshot.id)
+        } catch {
+            loadError = AppError(error: error)
+            await reload()
         }
     }
 }
