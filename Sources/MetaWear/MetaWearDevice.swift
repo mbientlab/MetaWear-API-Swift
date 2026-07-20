@@ -575,6 +575,7 @@ public actor MetaWearDevice {
             chunks.append((id: response[2], byteCount: Int(chunk.length)))
         }
         loggerRegistry[loggable.loggerKey] = chunks
+        mwLog("[Device] startLogging \(loggable.module.name): assigned logger ids \(chunks.map(\.id))")
 
         // Enable sensor output and start hardware
         for cmd in loggable.enableCommands where !cmd.isEmpty { try await proto.write(cmd) }
@@ -797,6 +798,7 @@ public actor MetaWearDevice {
             (id: $0.loggerID, byteCount: Int($1.length))
         }
         loggerRegistry[logger.loggerKey] = chunks
+        mwLog("[Device] recoverLoggers \(logger.loggerKey): matched logger ids \(chunks.map(\.id))")
     }
 
     /// Download raw log entries from the device.
@@ -1137,7 +1139,42 @@ public actor MetaWearDevice {
         try await proto.write(MWPacket.command(.logging, 0x09, [0xFF, 0xFF, 0xFF, 0xFF]))
 
         if let pageStream {
-            let completed = await Self.awaitFirstElement(of: pageStream, timeout: .seconds(30))
+            // Two independent completion signals, first one wins:
+            //   1. the documented 0x0D notification — which field testing
+            //      shows some boards never send after a drop, and
+            //   2. LOG_LENGTH reading 0 on two consecutive polls — the
+            //      entries provably gone.
+            // Bounded at 60 s: one board's drop outlived the previous 30 s
+            // bound (dirty NAND, long GC) and arming loggers on the still-
+            // grinding board recorded almost nothing.
+            let proto = self.proto
+            let completed = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    await Self.awaitFirstElement(of: pageStream, timeout: .seconds(60))
+                }
+                group.addTask {
+                    var zeroReads = 0
+                    for _ in 0..<30 {
+                        try? await Task.sleep(for: .seconds(2))
+                        guard let response = try? await proto.read(.logging, 0x05),
+                              response.count >= 6 else { continue }
+                        if MWPacketParser.parseUInt32LE(response, offset: 2) == 0 {
+                            zeroReads += 1
+                            if zeroReads >= 2 { return true }
+                        } else {
+                            zeroReads = 0
+                        }
+                    }
+                    return false
+                }
+                var success = false
+                for await finished in group where finished {
+                    success = true
+                    break
+                }
+                group.cancelAll()
+                return success
+            }
             mwLog(completed
                   ? "[Device] clearLog: drop completed"
                   : "[Device] clearLog: drop completion TIMED OUT — proceeding")

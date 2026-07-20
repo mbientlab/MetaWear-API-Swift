@@ -3,6 +3,25 @@ import Observation
 import SwiftData
 import MetaWear
 
+/// Per-module hardware implementations, read from module discovery. Each
+/// sensor variant MUST be selected by its own module's implementation byte
+/// (mirroring the C++ SDK's `module_info.at(MODULE).implementation`) —
+/// deriving the gyro from the ACCEL chip armed the wrong gyro data
+/// register on mixed-generation boards, so its loggers never fired.
+/// Field evidence: an MMS + MMRL group logged accel fine on both, gyro on
+/// neither-or-one depending on which board the guess happened to match.
+struct SensorImplementations {
+    let accel: UInt8
+    let gyro: UInt8
+    let fusionChip: MWSensorFusionChip
+
+    init(modules: [MWModule: MWModuleInfo]) {
+        accel = modules[.accelerometer]?.implementation ?? 1
+        gyro = modules[.gyro]?.implementation ?? 0
+        fusionChip = MWSensorFusionChip(accImpl: accel) ?? .bmi160
+    }
+}
+
 /// Drives on-device logging setup and teardown.
 ///
 /// Converts selected UI sensors into SDK loggers, persists pending
@@ -42,11 +61,11 @@ final class LogSessionViewModel {
         }
         let context = containers.local.mainContext
         let modules = await device.modules
-        let chip = MWSensorFusionChip(accImpl: modules[.accelerometer]?.implementation ?? 1) ?? .bmi160
+        let impls = SensorImplementations(modules: modules)
         var records: [LogSessionRecord] = []
         do {
             for selection in selections {
-                if let record = try await startOne(selection: selection, chip: chip, context: context, groupID: groupID) {
+                if let record = try await startOne(selection: selection, impls: impls, context: context, groupID: groupID) {
                     records.append(record)
                 }
             }
@@ -55,7 +74,7 @@ final class LogSessionViewModel {
             phase = .running(startedAt: .now)
             startElapsedTimer()
         } catch {
-            let stillRunning = await rollbackStartedRecords(records, chip: chip, context: context)
+            let stillRunning = await rollbackStartedRecords(records, impls: impls, context: context)
             if stillRunning.isEmpty {
                 activeRecords = []
                 phase = .idle
@@ -78,7 +97,7 @@ final class LogSessionViewModel {
     /// way. Returns nil if the sensor can't be logged on this board.
     private func startOne(
         selection: SensorSelection,
-        chip: MWSensorFusionChip,
+        impls: SensorImplementations,
         context: ModelContext,
         groupID: UUID? = nil
     ) async throws -> LogSessionRecord? {
@@ -121,7 +140,7 @@ final class LogSessionViewModel {
             return record
 
         default:
-            guard let loggable = Self.makeLoggable(for: selection, chip: chip) else { return nil }
+            guard let loggable = Self.makeLoggable(for: selection, impls: impls) else { return nil }
             try await device.startLogging(loggable)
             let record = LogSessionRecord(
                 deviceID: device.identifier,
@@ -141,7 +160,7 @@ final class LogSessionViewModel {
         elapsedTask = nil
 
         let modules = await device.modules
-        let chip = MWSensorFusionChip(accImpl: modules[.accelerometer]?.implementation ?? 1) ?? .bmi160
+        let impls = SensorImplementations(modules: modules)
         // Per-record try/catch — a single failed `stopOne` (BLE hiccup,
         // unexpected board state) used to abort the loop, leaving the
         // remaining records' `status` stuck at `.running` and the global
@@ -158,7 +177,7 @@ final class LogSessionViewModel {
         // freed AND resurrect the record as pending everywhere.
         for record in activeRecords where record.status != .downloaded {
             do {
-                try await stopOne(record: record, chip: chip)
+                try await stopOne(record: record, impls: impls)
             } catch {
                 lastError = AppError(error: error)
             }
@@ -168,7 +187,7 @@ final class LogSessionViewModel {
         phase = .stopped
     }
 
-    private func stopOne(record: LogSessionRecord, chip: MWSensorFusionChip) async throws {
+    private func stopOne(record: LogSessionRecord, impls: SensorImplementations) async throws {
         guard let selection = Self.decode(record.configJSON, kind: record.sensorKind) else { return }
         switch selection.id {
         case .temperature:
@@ -186,7 +205,7 @@ final class LogSessionViewModel {
             )
             try await device.stopLogging(polled, handles: handles)
         default:
-            if let loggable = Self.makeLoggable(for: selection, chip: chip) {
+            if let loggable = Self.makeLoggable(for: selection, impls: impls) {
                 try await device.stopLogging(loggable)
             }
         }
@@ -194,13 +213,13 @@ final class LogSessionViewModel {
 
     private func rollbackStartedRecords(
         _ records: [LogSessionRecord],
-        chip: MWSensorFusionChip,
+        impls: SensorImplementations,
         context: ModelContext
     ) async -> [LogSessionRecord] {
         var stillRunning: [LogSessionRecord] = []
         for record in records {
             do {
-                try await stopOne(record: record, chip: chip)
+                try await stopOne(record: record, impls: impls)
                 context.delete(record)
             } catch {
                 record.status = .running
@@ -266,12 +285,11 @@ final class LogSessionViewModel {
     /// natively loggable on the board (baro / temp / humidity / ambient
     /// light) — `SensorPickerSection` should already keep those out of the
     /// logging Add menu, but the nil branch is the safety net.
-    static func makeLoggable(for selection: SensorSelection, chip: MWSensorFusionChip) -> (any MWLoggable)? {
+    static func makeLoggable(for selection: SensorSelection, impls: SensorImplementations) -> (any MWLoggable)? {
         switch selection.id {
         case .accelerometer:
             let rangeG = Float(selection.range ?? 2)
-            let impl: UInt8 = chip == .bmi270 ? 4 : 1
-            switch MWAccelerometer.make(impl: impl, odrHz: selection.hz, rangeG: rangeG) {
+            switch MWAccelerometer.make(impl: impls.accel, odrHz: selection.hz, rangeG: rangeG) {
             case .bmi160(let s)?: return s
             case .bmi270(let s)?: return s
             case nil:             return nil
@@ -279,8 +297,7 @@ final class LogSessionViewModel {
 
         case .gyroscope:
             let rangeDPS = Float(selection.range ?? 2000)
-            let impl: UInt8 = chip == .bmi270 ? 1 : 0
-            switch MWGyroscope.make(impl: impl, odrHz: selection.hz, rangeDPS: rangeDPS) {
+            switch MWGyroscope.make(impl: impls.gyro, odrHz: selection.hz, rangeDPS: rangeDPS) {
             case .bmi160(let s)?: return s
             case .bmi270(let s)?: return s
             case nil:             return nil
@@ -297,13 +314,13 @@ final class LogSessionViewModel {
 
         case .sensorFusion(let out):
             switch out {
-            case .quaternion:                return MWSensorFusionQuaternion(chip: chip)
-            case .eulerAngles:               return MWSensorFusionEuler(chip: chip)
-            case .gravity:                   return MWSensorFusionGravity(chip: chip)
-            case .linearAcceleration:        return MWSensorFusionLinearAcceleration(chip: chip)
-            case .correctedAcceleration:     return MWSensorFusionCorrectedAcc(chip: chip)
-            case .correctedAngularVelocity:  return MWSensorFusionCorrectedGyro(chip: chip)
-            case .correctedMagneticField:    return MWSensorFusionCorrectedMag(chip: chip)
+            case .quaternion:                return MWSensorFusionQuaternion(chip: impls.fusionChip)
+            case .eulerAngles:               return MWSensorFusionEuler(chip: impls.fusionChip)
+            case .gravity:                   return MWSensorFusionGravity(chip: impls.fusionChip)
+            case .linearAcceleration:        return MWSensorFusionLinearAcceleration(chip: impls.fusionChip)
+            case .correctedAcceleration:     return MWSensorFusionCorrectedAcc(chip: impls.fusionChip)
+            case .correctedAngularVelocity:  return MWSensorFusionCorrectedGyro(chip: impls.fusionChip)
+            case .correctedMagneticField:    return MWSensorFusionCorrectedMag(chip: impls.fusionChip)
             }
 
         case .barometer:
