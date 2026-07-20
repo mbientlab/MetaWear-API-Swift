@@ -62,6 +62,9 @@ final class LogSessionViewModel {
         let context = containers.local.mainContext
         let modules = await device.modules
         let impls = SensorImplementations(modules: modules)
+        #if DEBUG
+        fputs("[LogSession] impls: accel \(impls.accel), gyro \(impls.gyro), fusion \(impls.fusionChip)\n", stderr)
+        #endif
         var records: [LogSessionRecord] = []
         do {
             for selection in selections {

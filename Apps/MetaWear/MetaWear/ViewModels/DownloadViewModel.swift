@@ -126,13 +126,18 @@ final class DownloadViewModel {
                     snapshots.append(snap)
                     record.status = .downloaded
                 } else {
-                    Self.debugLog("\(record.sensorKind): decoded EMPTY — record kept")
-                    record.status = .stopped
+                    // The drain COMPLETED (every page confirmed = entries
+                    // nulled on the board), so a record with nothing in it
+                    // can never be fulfilled — closing it as .failed stops
+                    // it haunting the pending list forever (stuck logging
+                    // badges on scan rows, an eternal "Ready To Collect").
+                    Self.debugLog("\(record.sensorKind): decoded EMPTY — closing record")
+                    record.status = .failed
                     keptBoardData = true
                 }
             } catch {
                 Self.debugLog("\(record.sensorKind): decode/save FAILED — \(error)")
-                record.status = .stopped
+                record.status = .failed
                 keptBoardData = true
                 lastError = AppError(error: error)
             }
@@ -142,7 +147,7 @@ final class DownloadViewModel {
         if keptBoardData {
             phase = .ready(
                 snapshots: snapshots,
-                warning: "Some sensors' data could not be decoded; everything decodable was saved."
+                warning: "Some sensors recorded no data; everything else was saved."
             )
             return
         }

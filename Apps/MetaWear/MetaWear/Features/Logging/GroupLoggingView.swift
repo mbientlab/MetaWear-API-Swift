@@ -106,6 +106,20 @@ struct GroupLoggingView: View {
                 if case .failed = $0.phase { return true }
                 return false
             }
+            // The whole point of collecting: the saved sessions. Surface
+            // the way to them right where the results are shown — the
+            // files live in Session History (per-board sections, CSV
+            // share from each session).
+            let savedAny = coordinator.boards.contains {
+                if case .saved = $0.phase { return true }
+                if case .savedWithIssues = $0.phase { return true }
+                return false
+            }
+            if !coordinator.isBusy, savedAny {
+                NavigationLink(value: DeviceFeaturePane.sessionHistory) {
+                    Label("View Saved Sessions", systemImage: "clock.arrow.circlepath")
+                }
+            }
             if !coordinator.isBusy, coordinator.lastPass == .collect, !failed.isEmpty {
                 Button {
                     let members = failed.map {
