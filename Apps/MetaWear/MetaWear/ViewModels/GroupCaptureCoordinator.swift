@@ -76,6 +76,17 @@ final class GroupCaptureCoordinator {
     private let persistence: MWPersistenceStore
     private unowned let appStore: AppStore
 
+    /// The on-board "recording" heartbeat: a short red pulse every 5 s,
+    /// played while a group session logs. LED playback runs on the board
+    /// itself, so the heartbeat survives the disconnect — a glance at the
+    /// fleet shows which pucks are recording. Slow + dim-duty on purpose:
+    /// the LED must not meaningfully dent a multi-hour logging battery.
+    static let recordingHeartbeat = MWLEDPattern(
+        highIntensity: 31, lowIntensity: 0,
+        riseTime: 0, highTime: 100, fallTime: 0,
+        pulseDuration: 5000, repeatCount: .max
+    )
+
     /// How long a sequential pass waits for one board's connect before
     /// declaring it absent and moving on. CoreBluetooth itself never times
     /// out a connect — without this cap one missing board wedges the whole
@@ -123,6 +134,10 @@ final class GroupCaptureCoordinator {
                 let vm = LogSessionViewModel(device: member.device, containers: containers)
                 await vm.start(selections, groupID: groupID)
                 if case .running = vm.phase {
+                    // Best-effort: the heartbeat is a courtesy indicator —
+                    // an LED hiccup must not fail a successfully started
+                    // board.
+                    try? await member.device.setLED(red: Self.recordingHeartbeat)
                     setPhase(id, .logging)
                 } else {
                     setPhase(id, .failed(vm.lastError?.message ?? "Logging did not start"))
@@ -172,6 +187,10 @@ final class GroupCaptureCoordinator {
     /// in the board's phase so one board's failure can't abort the walk.
     private func collectOne(member: Member) async {
         let id = member.device.identifier
+        // Recording is over the moment collection begins — clear the
+        // heartbeat first so the LED state can't outlive the session even
+        // if the download below fails. Best-effort, like the set.
+        try? await member.device.stopLED()
         let pending = appStore.pendingLogSessions.filter { $0.deviceID == id }
         let running = pending.filter { $0.status == .running }
 
