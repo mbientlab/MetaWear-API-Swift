@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftData
 import MetaWear
 import MetaWearPersistence
 
@@ -29,6 +30,8 @@ final class GroupCaptureCoordinator {
         case pending
         case connecting
         case starting
+        /// Loggers armed; waiting for proof that entries are landing.
+        case verifying
         /// Start pass succeeded — the board is recording on its own.
         case logging
         case stopping
@@ -147,11 +150,34 @@ final class GroupCaptureCoordinator {
                 let vm = LogSessionViewModel(device: member.device, containers: containers)
                 await vm.start(selections, groupID: groupID)
                 if case .running = vm.phase {
-                    // Best-effort: the heartbeat is a courtesy indicator —
-                    // an LED hiccup must not fail a successfully started
-                    // board.
-                    try? await member.device.setLED(red: Self.recordingHeartbeat)
-                    setPhase(id, .logging)
+                    // Don't take the firmware's word for it — verify that
+                    // entries are actually landing before leaving the
+                    // board. NAND garbage collection (kicked off by any
+                    // drop, including our clear moments ago) silently
+                    // swallows samples while it grinds, and SEVEN field
+                    // sessions proved no proxy detects its end: LOG_LENGTH
+                    // reads 0 on an empty-but-dirty log, and the 0x0D
+                    // drop notification may never arrive. The entry count
+                    // rising is the only trustworthy signal — while
+                    // logging is enabled it includes the RAM page, so a
+                    // healthy board confirms within seconds.
+                    setPhase(id, .verifying)
+                    if await confirmEntriesLanding(on: member.device) {
+                        // Best-effort: the heartbeat is a courtesy
+                        // indicator — an LED hiccup must not fail a
+                        // successfully started board.
+                        try? await member.device.setLED(red: Self.recordingHeartbeat)
+                        setPhase(id, .logging)
+                    } else {
+                        // The session is doomed — the sensors run but the
+                        // flash swallows everything. Tear it down so no
+                        // zombie records linger.
+                        await vm.stop()
+                        let context = containers.local.mainContext
+                        vm.activeRecords.forEach { context.delete($0) }
+                        try? context.save()
+                        setPhase(id, .failed("The board's flash is still busy (housekeeping after a clear). Wait a minute and start again."))
+                    }
                 } else {
                     setPhase(id, .failed(vm.lastError?.message ?? "Logging did not start"))
                 }
@@ -318,6 +344,19 @@ final class GroupCaptureCoordinator {
             }
         }
         return true
+    }
+
+    /// Poll the live entry count until it rises — proof the board is
+    /// genuinely recording. 90 s bound covers the longest post-clear GC
+    /// observed in the field; healthy boards confirm on the first poll.
+    private func confirmEntriesLanding(on device: MetaWearDevice) async -> Bool {
+        for _ in 0..<45 {
+            try? await Task.sleep(for: .seconds(2))
+            if let count = try? await device.read(MWLogLength()).value, count > 0 {
+                return true
+            }
+        }
+        return false
     }
 
     private struct ConnectTimeoutError: Error {}

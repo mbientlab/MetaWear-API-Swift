@@ -404,7 +404,7 @@ struct GroupLoggingView: View {
         switch phase {
         case .pending:
             Image(systemName: "circle.dotted").foregroundStyle(.secondary)
-        case .connecting, .starting, .stopping, .downloading:
+        case .connecting, .starting, .verifying, .stopping, .downloading:
             ProgressView().controlSize(.small)
         case .logging:
             Image(systemName: "record.circle.fill").foregroundStyle(Palette.danger)
@@ -425,6 +425,7 @@ struct GroupLoggingView: View {
         case .pending:              return "Waiting…"
         case .connecting:           return "Connecting…"
         case .starting:             return "Starting loggers…"
+        case .verifying:            return "Confirming data is recording… (up to a minute after a clear)"
         case .logging:              return "Logging"
         case .stopping:             return "Stopping…"
         case .downloading:          return "Downloading…"
