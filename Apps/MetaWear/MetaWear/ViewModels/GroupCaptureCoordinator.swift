@@ -64,7 +64,13 @@ final class GroupCaptureCoordinator {
 
     // MARK: - Observable state
 
+    enum PassKind { case start, collect }
+
     private(set) var boards: [BoardProgress] = []
+    /// Which pass produced `boards` — drives the post-pass affordances
+    /// (a failed COLLECT offers Retry; a failed start does not, since the
+    /// user can simply select those boards and start again).
+    private(set) var lastPass: PassKind?
     /// True while a start or collect pass is walking the fleet.
     private(set) var isBusy = false
     /// The download engine for whichever board is currently draining —
@@ -106,19 +112,13 @@ final class GroupCaptureCoordinator {
     /// `LogSessionRecord`s → disconnect. Boards that already carry a
     /// pending session are skipped — starting over it would fight the
     /// existing session for logger slots.
-    /// - Parameter existingGroupID: pass the live group's ID to ADD boards
-    ///   to it (e.g. a member that was out of range during the first pass)
-    ///   instead of minting a new batch.
-    func startAll(
-        members: [Member],
-        selections: [SensorSelection],
-        joining existingGroupID: UUID? = nil
-    ) async {
+    func startAll(members: [Member], selections: [SensorSelection]) async {
         guard !isBusy, !members.isEmpty, !selections.isEmpty else { return }
         isBusy = true
+        lastPass = .start
         defer { isBusy = false }
 
-        let groupID = existingGroupID ?? UUID()
+        let groupID = UUID()
         boards = members.map { BoardProgress(id: $0.device.identifier, name: $0.name) }
 
         for member in members {
@@ -162,6 +162,7 @@ final class GroupCaptureCoordinator {
     func stopAndDownloadAll(members: [Member]) async {
         guard !isBusy, !members.isEmpty else { return }
         isBusy = true
+        lastPass = .collect
         defer {
             isBusy = false
             activeDownload = nil

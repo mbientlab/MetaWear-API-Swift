@@ -35,11 +35,7 @@ struct GroupLoggingView: View {
 
                 if !active.isEmpty {
                     activeGroupSection(records: active)
-                }
-                // The picker stays reachable while a group is live so a
-                // board that was out of range during the first pass can
-                // still be added — its sessions join the SAME batch.
-                if !coordinator.isBusy {
+                } else if !coordinator.isBusy {
                     boardPickerSection(now: timeline.date)
                     SensorPickerSection(
                         selections: $selections,
@@ -48,7 +44,7 @@ struct GroupLoggingView: View {
                         supportedKinds: Self.groupLoggableKinds,
                         isLocked: false
                     )
-                    startSection(now: timeline.date, joining: active.first?.groupID)
+                    startSection(now: timeline.date)
                 }
             }
         }
@@ -101,6 +97,27 @@ struct GroupLoggingView: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
+                }
+            }
+            // A failed download keeps the board's data — offer the retry
+            // right where the failure is shown. Rebuilds members from the
+            // failed rows (device handles resolve demo-fleet-first).
+            let failed = coordinator.boards.filter {
+                if case .failed = $0.phase { return true }
+                return false
+            }
+            if !coordinator.isBusy, coordinator.lastPass == .collect, !failed.isEmpty {
+                Button {
+                    let members = failed.map {
+                        GroupCaptureCoordinator.Member(
+                            device: resolveDevice(for: $0.id),
+                            name: $0.name
+                        )
+                    }
+                    Task { await appStore.groupCapture.stopAndDownloadAll(members: members) }
+                } label: {
+                    Label("Retry Failed Download\(failed.count == 1 ? "" : "s")",
+                          systemImage: "arrow.clockwise")
                 }
             }
         } header: {
@@ -215,25 +232,22 @@ struct GroupLoggingView: View {
     /// Members, footer count, and enablement all derive from ONE live
     /// computation — a board that went off-air after being checked must
     /// not be silently dropped while the footer still counts it.
-    private func startSection(now: Date, joining groupID: UUID?) -> some View {
+    private func startSection(now: Date) -> some View {
         let members = selectedMembers(now: now)
         return Section {
             Button {
                 Task {
-                    await appStore.groupCapture.startAll(
-                        members: members, selections: selections, joining: groupID
-                    )
+                    await appStore.groupCapture.startAll(members: members, selections: selections)
                 }
             } label: {
-                Label(groupID == nil ? "Start Logging All" : "Add To Group",
-                      systemImage: "record.circle.fill")
+                Label("Start Logging All", systemImage: "record.circle.fill")
                     .font(.body.weight(.semibold))
             }
             .disabled(members.isEmpty || selections.isEmpty || appStore.groupCapture.isBusy)
         } footer: {
             Text(members.isEmpty
                  ? "Select at least one board above."
-                 : "\(members.count) board\(members.count == 1 ? "" : "s") will start logging\(groupID == nil ? "" : " and join the group").")
+                 : "\(members.count) board\(members.count == 1 ? "" : "s") will start logging.")
         }
     }
 
