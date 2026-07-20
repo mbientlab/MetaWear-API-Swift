@@ -7,12 +7,23 @@ import SwiftUI
 /// scan ripples rising from the bottom corner, a nod to what this screen
 /// does all day. No motion by owner request.
 struct BrandScanBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
             ZStack {
                 Palette.accent
+
+                // Soften the field toward the cells' tone — full-strength
+                // #FE9500 against pure-white cards read as too harsh a
+                // jump (owner feedback). A light veil lifts the orange
+                // toward cream in light mode; dark mode's near-black cells
+                // sit comfortably on the full orange, so no veil there.
+                if colorScheme == .light {
+                    Color.white.opacity(0.25)
+                }
 
                 // Scan ripples centred just off the bottom-leading corner,
                 // sweeping up behind the watermark.
