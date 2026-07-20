@@ -31,6 +31,17 @@ enum DemoMode {
         identities.contains { $0.identifier == id }
     }
 
+    /// Display MAC for a demo board (from its transport identity, wire
+    /// order reversed to the usual big-endian colon form); nil otherwise.
+    static func macAddress(for id: UUID) -> String? {
+        guard let identity = identities.first(where: { $0.identifier == id }) else {
+            return nil
+        }
+        return identity.macLSBFirst.reversed()
+            .map { String(format: "%02X", $0) }
+            .joined(separator: ":")
+    }
+
     /// Display name for a demo board ("Simulated MetaWear", "Simulated
     /// MetaWear 2", …); nil for non-demo IDs.
     static func name(for id: UUID) -> String? {

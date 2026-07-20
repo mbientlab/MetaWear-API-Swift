@@ -575,6 +575,7 @@ public actor MetaWearDevice {
             chunks.append((id: response[2], byteCount: Int(chunk.length)))
         }
         loggerRegistry[loggable.loggerKey] = chunks
+        mwLog("[Device] startLogging \(loggable.module.name): assigned logger ids \(chunks.map(\.id))")
 
         // Enable sensor output and start hardware
         for cmd in loggable.enableCommands where !cmd.isEmpty { try await proto.write(cmd) }
@@ -607,6 +608,11 @@ public actor MetaWearDevice {
         // still needs its own stop + disable writes — otherwise the board
         // keeps sampling that sensor (and `downloadLogs` returns no entries
         // because the logger never sees a fresh session marker).
+        // Flush the in-RAM partial page WHILE logging is still enabled —
+        // the NAND write-cache flush is only known to be honoured with the
+        // module live; downloadLogs flushes again afterwards as belt and
+        // braces. No-op on non-MMS boards.
+        _ = try? await flushLogPage()
         try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))  // stop logging
         for cmd in loggable.stopCommands    where !cmd.isEmpty { try await proto.write(cmd) }
         for cmd in loggable.disableCommands where !cmd.isEmpty { try await proto.write(cmd) }
@@ -741,6 +747,7 @@ public actor MetaWearDevice {
         try? await stopTimer(timer)
         try? await removeTimer(timer)
         try? await removeEvent(MWEvent(id: handles.eventID))
+        _ = try? await flushLogPage()   // see MWLoggable overload
         try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))
         state = .idle
     }
@@ -791,6 +798,7 @@ public actor MetaWearDevice {
             (id: $0.loggerID, byteCount: Int($1.length))
         }
         loggerRegistry[logger.loggerKey] = chunks
+        mwLog("[Device] recoverLoggers \(logger.loggerKey): matched logger ids \(chunks.map(\.id))")
     }
 
     /// Download raw log entries from the device.
@@ -804,7 +812,11 @@ public actor MetaWearDevice {
     /// data. We force-flush the active page here so that workflow shape always
     /// works without the caller having to remember `flushLogPage()`. The flush
     /// is a no-op on MMRL (logging revision < 3).
-    public func downloadLogs() async throws -> AsyncThrowingStream<Download<[RawLogEntry]>, Error> {
+    /// - Parameter expectEntries: pass true when the caller KNOWS the board
+    ///   logged (local records exist, or it reported itself logging) — a
+    ///   zero LOG_LENGTH then triggers a longer flush-settle wait instead of
+    ///   an instant empty download.
+    public func downloadLogs(expectEntries: Bool = false) async throws -> AsyncThrowingStream<Download<[RawLogEntry]>, Error> {
         mwLog("[Device] downloadLogs")
         guard case .idle = state else {
             throw MWError.invalidState("Device must be idle to download")
@@ -816,7 +828,7 @@ public actor MetaWearDevice {
             // below reflects every captured sample. Idempotent — safe to call even
             // if the user already invoked `flushLogPage()` explicitly. No-op on
             // pre-MMS firmware (revision < 3).
-            _ = try await flushLogPage()
+            let didFlush = try await flushLogPage()
 
             // Enable readout-notify and progress channels, then read the entry count.
             try await proto.write(MWPacket.command(.logging, 0x07, [0x01]))  // enable readout notify
@@ -828,11 +840,7 @@ public actor MetaWearDevice {
             let pageStream     = await proto.subscribe(to: .logging, register: 0x0D)
 
             // Read entry count, then start the download
-            let lengthResponse = try await proto.read(.logging, 0x05)
-            guard lengthResponse.count >= 6 else {
-                throw MWError.operationFailed("Log length response too short")
-            }
-            let nEntries = MWPacketParser.parseUInt32LE(lengthResponse, offset: 2)
+            let nEntries = try await settledLogLength(afterFlush: didFlush, expectEntries: expectEntries)
 
             // Empty log buffer: short-circuit. Issuing the readout with count=0
             // produces no `0x07` raw entries, no `0x0D` page-completed notice, and
@@ -1110,9 +1118,92 @@ public actor MetaWearDevice {
             throw MWError.invalidState("Device must be idle to clear the log")
         }
         try await proto.write(MWPacket.command(.logging, 0x01, [0x00]))           // stop logging
+
+        // The drop is ASYNCHRONOUS on MMS NAND: it kicks off page garbage
+        // collection that grinds for seconds, and the firmware signals
+        // completion with a READOUT_PAGE_COMPLETED (0x0D) notification —
+        // the spec's register table: "sent … after the Drop Entries
+        // command completes". Arming a new session before that lands
+        // records NOTHING (field evidence: a machine-speed clear→start
+        // logged zero entries on both boards; the same boards logged fine
+        // after a human-paced clear). MMS-revision boards therefore wait
+        // for the completion, bounded — if a board never signals we
+        // proceed best-effort rather than wedge every caller.
+        let awaitCompletion = (modules[.logging]?.revision ?? 0) >= 3
+        var pageStream: AsyncThrowingStream<Data, Error>?
+        if awaitCompletion {
+            try await proto.write(MWPacket.command(.logging, 0x0D, [0x01]))
+            pageStream = await proto.subscribe(to: .logging, register: 0x0D)
+        }
+
         try await proto.write(MWPacket.command(.logging, 0x09, [0xFF, 0xFF, 0xFF, 0xFF]))
+
+        if let pageStream {
+            // Two independent completion signals, first one wins:
+            //   1. the documented 0x0D notification — which field testing
+            //      shows some boards never send after a drop, and
+            //   2. LOG_LENGTH reading 0 on two consecutive polls — the
+            //      entries provably gone.
+            // Bounded at 60 s: one board's drop outlived the previous 30 s
+            // bound (dirty NAND, long GC) and arming loggers on the still-
+            // grinding board recorded almost nothing.
+            let proto = self.proto
+            let completed = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    await Self.awaitFirstElement(of: pageStream, timeout: .seconds(60))
+                }
+                group.addTask {
+                    var zeroReads = 0
+                    for _ in 0..<30 {
+                        try? await Task.sleep(for: .seconds(2))
+                        guard let response = try? await proto.read(.logging, 0x05),
+                              response.count >= 6 else { continue }
+                        if MWPacketParser.parseUInt32LE(response, offset: 2) == 0 {
+                            zeroReads += 1
+                            if zeroReads >= 2 { return true }
+                        } else {
+                            zeroReads = 0
+                        }
+                    }
+                    return false
+                }
+                var success = false
+                for await finished in group where finished {
+                    success = true
+                    break
+                }
+                group.cancelAll()
+                return success
+            }
+            mwLog(completed
+                  ? "[Device] clearLog: drop completed"
+                  : "[Device] clearLog: drop completion TIMED OUT — proceeding")
+            await proto.unsubscribe(from: .logging, register: 0x0D)
+            try? await proto.write(MWPacket.command(.logging, 0x0D, [0x00]))
+        }
+
         try await proto.write(MWPacket.command(.logging, 0x0A, []))               // remove all loggers
         loggerRegistry.removeAll()
+    }
+
+    /// Wait for the first element of `stream`, bounded by `timeout`.
+    /// - Returns: true when an element arrived before the deadline.
+    private static func awaitFirstElement(
+        of stream: AsyncThrowingStream<Data, Error>, timeout: Duration
+    ) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                var iterator = stream.makeAsyncIterator()
+                return (try? await iterator.next()) != nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
     }
 
     /// Stop on-board logging sampling (`[0x0B, 0x01, 0x00]`) WITHOUT
@@ -1148,6 +1239,54 @@ public actor MetaWearDevice {
         }
         try await proto.write(MWPacket.command(.logging, 0x10, [0x01]))
         return true
+    }
+
+    /// Read LOG_LENGTH, waiting out the MMS's ASYNCHRONOUS page flush.
+    ///
+    /// The flush command returns immediately while the firmware copies the
+    /// in-RAM partial page to flash — an immediate read races that copy and
+    /// reports the PRE-flush count. Field evidence (two-board group collect,
+    /// 2026-07-19): a machine-speed stop→download read 0 entries on one
+    /// board and a stale page-aligned count on the other; both boards'
+    /// fresh samples were still in RAM and both downloads came back empty.
+    /// Human-paced solo flows always masked the race with navigation delays
+    /// between Stop and Download. Give the flush a head start, then poll
+    /// until two consecutive reads agree (bounded, ~2 s worst case).
+    private func settledLogLength(afterFlush didFlush: Bool, expectEntries: Bool) async throws -> UInt32 {
+        func readLength() async throws -> UInt32 {
+            let response = try await proto.read(.logging, 0x05)
+            guard response.count >= 6 else {
+                throw MWError.operationFailed("Log length response too short")
+            }
+            return MWPacketParser.parseUInt32LE(response, offset: 2)
+        }
+        guard didFlush else { return try await readLength() }
+        try await Task.sleep(for: .milliseconds(300))
+        var previous = try await readLength()
+        mwLog("[Device] settledLogLength: read \(previous)")
+        var attempt = 0
+        while true {
+            attempt += 1
+            // Two consecutive agreeing reads normally settle it — but when
+            // the caller KNOWS the board logged (records exist / it reported
+            // itself logging), a stable ZERO means the NAND flush hasn't
+            // landed yet, not that the board is empty. Keep waiting (and
+            // periodically re-issue the flush; it has no ack) up to ~8 s
+            // before conceding — an empty download here reads as data loss
+            // to the user, so patience is the cheaper failure mode.
+            let expectingMore = expectEntries && previous == 0
+            let maxAttempts = expectingMore ? 10 : 6
+            guard attempt <= maxAttempts else { return previous }
+            if expectingMore, attempt.isMultiple(of: 3) {
+                mwLog("[Device] settledLogLength: re-issuing flush")
+                try await proto.write(MWPacket.command(.logging, 0x10, [0x01]))
+            }
+            try await Task.sleep(for: .milliseconds(expectingMore ? 750 : 250))
+            let current = try await readLength()
+            mwLog("[Device] settledLogLength: read \(current)")
+            if current == previous, !(expectEntries && current == 0) { return current }
+            previous = current
+        }
     }
 
     // MARK: - Logger recovery

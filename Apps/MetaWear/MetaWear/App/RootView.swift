@@ -1,5 +1,6 @@
 import SwiftUI
 import MetaWear
+import MetaWearPersistence
 
 struct RootView: View {
     @Environment(AppStore.self) private var appStore
@@ -22,6 +23,13 @@ struct RootView: View {
                 .navigationDestination(for: DeviceFeaturePane.self) { pane in
                     pane.destination()
                 }
+                // Declared ONCE at the stack root: SessionHistoryView can
+                // appear more than once per stack (scan-root link + the
+                // group screen's link), and per-instance declarations
+                // triggered SwiftUI's duplicate-destination warning.
+                .navigationDestination(for: MWSessionSnapshot.self) {
+                    SessionDetailView(snapshot: $0)
+                }
             }
         } detail: {
             NavigationStack(path: $path) {
@@ -37,11 +45,20 @@ struct RootView: View {
                         // transition. In regular (iPad) the sidebar is
                         // already showing alongside, so the detail just
                         // sits empty rather than nagging the user.
+                        // Safety net: if this pane ever DOES become the
+                        // visible column in compact (the onChange's flip
+                        // can be swallowed mid-transition), push focus
+                        // back to the sidebar. Harmless in regular width
+                        // — preferredCompactColumn only affects compact.
                         Color.clear
+                            .onAppear { preferredColumn = .sidebar }
                     }
                 }
                 .navigationDestination(for: DeviceFeaturePane.self) { pane in
                     pane.destination()
+                }
+                .navigationDestination(for: MWSessionSnapshot.self) {
+                    SessionDetailView(snapshot: $0)
                 }
             }
         }
@@ -62,7 +79,18 @@ struct RootView: View {
             // (e.g. a foreignDownload pushed for the previous board) must
             // not resolve against the next one.
             path = NavigationPath()
-            preferredColumn = newID == nil ? .sidebar : .detail
+            if newID == nil {
+                // Deferred one tick: flipping the compact column in the
+                // SAME transaction as the path reset + the detail content
+                // swapping to the blank pane gets swallowed by
+                // NavigationSplitView — compact users ended up stranded on
+                // an empty detail page with only a Back button (field bug:
+                // tap X to disconnect → blank screen instead of the scan
+                // list).
+                Task { @MainActor in preferredColumn = .sidebar }
+            } else {
+                preferredColumn = .detail
+            }
         }
         .overlay {
             if isConnecting {
@@ -159,6 +187,8 @@ enum DeviceFeaturePane: Hashable {
     case sensorConfig
     case liveStream([SensorSelection])
     case logSession
+    /// MetaBase-style multi-board logging — lives on the sidebar stack.
+    case groupLogging
     case download
     /// The Download screen in foreign-session mode: drains a board whose
     /// logging was started on another device via the anonymous-logger path.
@@ -174,6 +204,7 @@ enum DeviceFeaturePane: Hashable {
         case .sensorConfig:              SensorConfigView()
         case .liveStream(let sels):      LiveStreamView(selections: sels)
         case .logSession:                LogSessionView()
+        case .groupLogging:              GroupLoggingView()
         case .download:                  DownloadView()
         case .foreignDownload(let s):    DownloadView(foreign: s)
         case .sessionHistory:            SessionHistoryView()

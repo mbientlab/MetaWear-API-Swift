@@ -77,6 +77,24 @@ struct SessionHistoryGroupingTests {
         #expect(sections[1].id == id.uuidString)
     }
 
+    /// Titles prefer the MAC (the board identity users see everywhere
+    /// else) over the DIS serial when the translation is known — grouping
+    /// still keys on the serial, which every record carries.
+    @Test func titlesPreferMACWhenKnown() {
+        let sections = SessionHistoryGrouping.sections(
+            from: [
+                snap(serial: "0123FF", name: "MetaWear", start: 200),
+                snap(serial: "045A2C", name: "MetaWear", start: 100),
+            ],
+            macBySerial: ["0123FF": "CD:2E:12:34:56:78"]
+        )
+        #expect(sections[0].title == "MetaWear · CD:2E:12:34:56:78")
+        // Untranslated boards keep the serial fallback.
+        #expect(sections[1].title == "MetaWear · 045A2C")
+        // Grouping keys stay serial-based regardless.
+        #expect(sections[0].id == "0123FF")
+    }
+
     @Test func sectionsOrderNewestFirst() {
         let sections = SessionHistoryGrouping.sections(from: [
             snap(serial: "AAAA01", name: "old board", start: 100),

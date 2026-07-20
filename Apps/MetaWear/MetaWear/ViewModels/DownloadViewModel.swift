@@ -35,6 +35,15 @@ final class DownloadViewModel {
     var phase: Phase = .idle
     var lastError: AppError?
 
+    /// Mirrors the SDK's `mwLog` (stderr, DEBUG only) so decode outcomes
+    /// land in the same console as the wire log — field diagnosis of
+    /// "which record came up empty" must not require a debugger.
+    private static func debugLog(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        fputs("[Download] \(message())\n", stderr)
+        #endif
+    }
+
     init(device: MetaWearDevice, store: MWPersistenceStore, containers: AppContainers,
          deviceName: String? = nil) {
         self.device = device
@@ -61,7 +70,7 @@ final class DownloadViewModel {
         phase = .downloading(progress: 0, downloaded: 0, total: 0)
 
         let modules = await device.modules
-        let chip = MWSensorFusionChip(accImpl: modules[.accelerometer]?.implementation ?? 1) ?? .bmi160
+        let impls = SensorImplementations(modules: modules)
         guard let info = await device.deviceInfo else {
             phase = .failed(message: "Device info unavailable")
             return
@@ -82,14 +91,20 @@ final class DownloadViewModel {
             return
         }
         for record in records {
-            await recoverLoggers(for: record, chip: chip, active: activeLoggers)
+            await recoverLoggers(for: record, impls: impls, active: activeLoggers)
         }
 
         // 2. ONE raw download. Entries from every logger come through this
         //    stream together; per-record dispatch happens after.
         let allEntries: [RawLogEntry]
         do {
-            allEntries = try await drainRawDownload()
+            allEntries = try await drainRawDownload(expectEntries: true)
+            let perLogger = Dictionary(grouping: allEntries, by: \.id)
+                .mapValues(\.count)
+                .sorted { $0.key < $1.key }
+                .map { "id \($0.key): \($0.value)" }
+                .joined(separator: ", ")
+            Self.debugLog("drained \(allEntries.count) entries [\(perLogger)]")
         } catch {
             phase = .failed(message: error.localizedDescription)
             lastError = AppError(error: error)
@@ -103,18 +118,26 @@ final class DownloadViewModel {
             do {
                 if let snap = try await decodeAndSave(
                     record: record,
-                    chip: chip,
+                    impls: impls,
                     info: info,
                     entries: allEntries
                 ) {
+                    Self.debugLog("\(record.sensorKind): saved \(snap.sampleCount) samples")
                     snapshots.append(snap)
                     record.status = .downloaded
                 } else {
-                    record.status = .stopped
+                    // The drain COMPLETED (every page confirmed = entries
+                    // nulled on the board), so a record with nothing in it
+                    // can never be fulfilled — closing it as .failed stops
+                    // it haunting the pending list forever (stuck logging
+                    // badges on scan rows, an eternal "Ready To Collect").
+                    Self.debugLog("\(record.sensorKind): decoded EMPTY — closing record")
+                    record.status = .failed
                     keptBoardData = true
                 }
             } catch {
-                record.status = .stopped
+                Self.debugLog("\(record.sensorKind): decode/save FAILED — \(error)")
+                record.status = .failed
                 keptBoardData = true
                 lastError = AppError(error: error)
             }
@@ -124,7 +147,7 @@ final class DownloadViewModel {
         if keptBoardData {
             phase = .ready(
                 snapshots: snapshots,
-                warning: "Some log data could not be decoded. Board data was kept so you can retry Download or clear it from Settings."
+                warning: "Some sensors recorded no data; everything else was saved."
             )
             return
         }
@@ -187,7 +210,9 @@ final class DownloadViewModel {
                 return
             }
 
-            let entries = try await drainRawDownload()
+            let entries = try await drainRawDownload(
+                expectEntries: state.entryCount > 0 || state.isActivelyLogging
+            )
             guard let info = await device.deviceInfo else {
                 throw MWError.invalidState("Device info unavailable")
             }
@@ -195,6 +220,7 @@ final class DownloadViewModel {
             var snapshots: [MWSessionSnapshot] = []
             for signal in signals {
                 let samples = try await device.decodeEntries(entries, for: signal)
+                Self.debugLog("foreign \(signal.identifier): \(samples.count) samples")
                 if let snap = try await save(anonymousSignal: signal, samples: samples, info: info) {
                     snapshots.append(snap)
                 }
@@ -227,8 +253,11 @@ final class DownloadViewModel {
 
     /// Drain `device.downloadLogs()` into a single accumulated entries array,
     /// updating `phase` with the percentage as the download progresses.
-    private func drainRawDownload() async throws -> [RawLogEntry] {
-        let stream = try await device.downloadLogs()
+    /// - Parameter expectEntries: the caller knows the board logged —
+    ///   passes through to the SDK's flush-settle logic so a slow NAND
+    ///   flush waits instead of yielding an instant empty download.
+    private func drainRawDownload(expectEntries: Bool = false) async throws -> [RawLogEntry] {
+        let stream = try await device.downloadLogs(expectEntries: expectEntries)
         var all: [RawLogEntry] = []
         var sawCompletion = false
         for try await chunk in stream {
@@ -362,7 +391,7 @@ final class DownloadViewModel {
     /// (`MWLoggable` or `MWPolledLogger`) corresponds to the record. Silently
     /// ignores errors — they'll resurface meaningfully when `decodeAndSave`
     /// can't find the chunks in the registry.
-    private func recoverLoggers(for record: LogSessionRecord, chip: MWSensorFusionChip,
+    private func recoverLoggers(for record: LogSessionRecord, impls: SensorImplementations,
                                 active: [ActiveLogger]) async {
         guard let selection = LogSessionViewModel.decode(record.configJSON, kind: record.sensorKind) else { return }
         switch selection.id {
@@ -379,7 +408,7 @@ final class DownloadViewModel {
             )
             try? await device.recoverLoggers(for: polled, using: active)
         default:
-            if let loggable = LogSessionViewModel.makeLoggable(for: selection, chip: chip) {
+            if let loggable = LogSessionViewModel.makeLoggable(for: selection, impls: impls) {
                 try? await device.recoverLoggers(for: loggable, using: active)
             }
         }
@@ -387,7 +416,7 @@ final class DownloadViewModel {
 
     private func decodeAndSave(
         record: LogSessionRecord,
-        chip: MWSensorFusionChip,
+        impls: SensorImplementations,
         info: MWDeviceInformation,
         entries: [RawLogEntry]
     ) async throws -> MWSessionSnapshot? {
@@ -400,8 +429,7 @@ final class DownloadViewModel {
         switch selection.id {
         case .accelerometer:
             let rangeG = Float(selection.range ?? 2)
-            let impl: UInt8 = chip == .bmi270 ? 4 : 1
-            switch MWAccelerometer.make(impl: impl, odrHz: selection.hz, rangeG: rangeG) {
+            switch MWAccelerometer.make(impl: impls.accel, odrHz: selection.hz, rangeG: rangeG) {
             case .bmi160(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries, groupID: groupID)
             case .bmi270(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries, groupID: groupID)
             case nil:             return nil
@@ -409,8 +437,7 @@ final class DownloadViewModel {
 
         case .gyroscope:
             let rangeDPS = Float(selection.range ?? 2000)
-            let impl: UInt8 = chip == .bmi270 ? 1 : 0
-            switch MWGyroscope.make(impl: impl, odrHz: selection.hz, rangeDPS: rangeDPS) {
+            switch MWGyroscope.make(impl: impls.gyro, odrHz: selection.hz, rangeDPS: rangeDPS) {
             case .bmi160(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries, groupID: groupID)
             case .bmi270(let s)?: return try await decodeAndPersist(s, info: info, label: label, entries: entries, groupID: groupID)
             case nil:             return nil
@@ -426,25 +453,25 @@ final class DownloadViewModel {
         case .sensorFusion(let out):
             switch out {
             case .quaternion:
-                return try await decodeAndPersist(MWSensorFusionQuaternion(chip: chip),
+                return try await decodeAndPersist(MWSensorFusionQuaternion(chip: impls.fusionChip),
                                                   info: info, label: label, entries: entries, groupID: groupID)
             case .eulerAngles:
-                return try await decodeAndPersist(MWSensorFusionEuler(chip: chip),
+                return try await decodeAndPersist(MWSensorFusionEuler(chip: impls.fusionChip),
                                                   info: info, label: label, entries: entries, groupID: groupID)
             case .gravity:
-                return try await decodeAndPersist(MWSensorFusionGravity(chip: chip),
+                return try await decodeAndPersist(MWSensorFusionGravity(chip: impls.fusionChip),
                                                   info: info, label: label, entries: entries, groupID: groupID)
             case .linearAcceleration:
-                return try await decodeAndPersist(MWSensorFusionLinearAcceleration(chip: chip),
+                return try await decodeAndPersist(MWSensorFusionLinearAcceleration(chip: impls.fusionChip),
                                                   info: info, label: label, entries: entries, groupID: groupID)
             case .correctedAcceleration:
-                return try await decodeAndPersist(MWSensorFusionCorrectedAcc(chip: chip),
+                return try await decodeAndPersist(MWSensorFusionCorrectedAcc(chip: impls.fusionChip),
                                                   info: info, label: label, entries: entries, groupID: groupID)
             case .correctedAngularVelocity:
-                return try await decodeAndPersist(MWSensorFusionCorrectedGyro(chip: chip),
+                return try await decodeAndPersist(MWSensorFusionCorrectedGyro(chip: impls.fusionChip),
                                                   info: info, label: label, entries: entries, groupID: groupID)
             case .correctedMagneticField:
-                return try await decodeAndPersist(MWSensorFusionCorrectedMag(chip: chip),
+                return try await decodeAndPersist(MWSensorFusionCorrectedMag(chip: impls.fusionChip),
                                                   info: info, label: label, entries: entries, groupID: groupID)
             }
 

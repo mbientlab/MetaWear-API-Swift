@@ -174,6 +174,19 @@ struct ScanView: View {
                     )
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                // Group logging — log on several boards at once, MetaBase
+                // style. Badged red while a fleet is recording so the way
+                // back to Stop & Download stays discoverable. VALUE-based
+                // push, deliberately: a screen presented via an
+                // isPresented destination can't resolve value links tapped
+                // inside it (the path doesn't contain the screen), which
+                // silently broke "View Saved Sessions" on the group page.
+                NavigationLink(value: DeviceFeaturePane.groupLogging) {
+                    Label("Group Logging", systemImage: "square.stack.3d.down.right")
+                }
+                .tint(hasActiveGroup ? Palette.danger : nil)
+            }
         }
         .task {
             if viewModel == nil {
@@ -182,6 +195,12 @@ struct ScanView: View {
             viewModel?.startScan()
         }
         .onDisappear { viewModel?.stopScan() }
+    }
+
+    /// True while any pending session carries a group tag — a fleet is
+    /// recording (or awaiting collection).
+    private var hasActiveGroup: Bool {
+        appStore.pendingLogSessions.contains { $0.groupID != nil }
     }
 
     private func status(for uuid: UUID, now: Date) -> DeviceConnectionStatus {

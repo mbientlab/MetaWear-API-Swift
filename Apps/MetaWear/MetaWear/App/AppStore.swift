@@ -65,6 +65,19 @@ final class AppStore {
 
     // MARK: - Demo device
 
+    /// Orchestrates group logging (start/stop-and-download across several
+    /// boards). Owned here — never by a view — so an in-flight fleet walk
+    /// survives navigation. Created lazily; solo sessions never pay for it.
+    private var _groupCapture: GroupCaptureCoordinator?
+    var groupCapture: GroupCaptureCoordinator {
+        if let coordinator = _groupCapture { return coordinator }
+        let coordinator = GroupCaptureCoordinator(
+            containers: containers, persistence: persistence, appStore: self
+        )
+        _groupCapture = coordinator
+        return coordinator
+    }
+
     /// The fully simulated MetaWear fleet (see `DemoBLETransport.Identity`).
     /// Created on first access so non-demo sessions never pay for it; each
     /// board is a stable instance reused across connect/disconnect cycles
