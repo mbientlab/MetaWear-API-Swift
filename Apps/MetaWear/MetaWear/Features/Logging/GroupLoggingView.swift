@@ -165,6 +165,11 @@ struct GroupLoggingView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(candidate.name)
                                     .foregroundStyle(.primary)
+                                Text(candidate.detail)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
                                 if appStore.hasPendingLog(forPeripheral: candidate.device.identifier) {
                                     Text("Has a session waiting — download it first")
                                         .font(.caption)
@@ -180,6 +185,10 @@ struct GroupLoggingView: View {
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
+                            }
+                            Spacer()
+                            if let rssi = candidate.rssi {
+                                RSSIPill(dBm: rssi)
                             }
                         }
                     }
@@ -222,6 +231,13 @@ struct GroupLoggingView: View {
     private struct Candidate {
         let device: MetaWearDevice
         let name: String
+        /// Live signal when the board is on air; nil for off-air and demo.
+        let rssi: Int?
+        /// The distinguishing identity line: MAC when known (remembered
+        /// record or MAC-broadcast advertisement), else the iOS peripheral
+        /// identifier — a screen full of boards named "MetaWear" is
+        /// unpickable without one or the other.
+        let detail: String
     }
 
     /// Boards eligible for a group: remembered boards (connectable by known
@@ -235,7 +251,19 @@ struct GroupLoggingView: View {
             let localID = appStore.localPeripheralUUID(for: remembered)
             guard seen.insert(localID).inserted else { continue }
             let device = appStore.scanner.device(forKnownIdentifier: localID)
-            result.append(Candidate(device: device, name: remembered.name ?? "MetaWear"))
+            let isFresh = DeviceFreshness.isFresh(
+                lastSeen: appStore.scanner.advertisementLastSeen[localID], now: now
+            )
+            result.append(Candidate(
+                device: device,
+                name: remembered.name ?? "MetaWear",
+                // The scanner's RSSI map freezes when a board goes off air —
+                // only surface it while the advertisement is fresh.
+                rssi: isFresh ? appStore.scanner.advertisementRSSI[localID] : nil,
+                detail: remembered.macAddress
+                    ?? appStore.scanner.advertisedMACs[localID]
+                    ?? localID.uuidString
+            ))
         }
         for device in scanVM?.devices ?? [] {
             guard DeviceFreshness.isFresh(
@@ -243,14 +271,22 @@ struct GroupLoggingView: View {
             ) else { continue }
             guard seen.insert(device.identifier).inserted else { continue }
             let name = scanVM?.advertisedName(for: device.identifier) ?? "MetaWear"
-            result.append(Candidate(device: device, name: name))
+            result.append(Candidate(
+                device: device,
+                name: name,
+                rssi: appStore.scanner.advertisementRSSI[device.identifier],
+                detail: appStore.scanner.advertisedMACs[device.identifier]
+                    ?? device.identifier.uuidString
+            ))
         }
         if DemoMode.isEnabled {
             for demo in appStore.demoDevices {
                 guard seen.insert(demo.identifier).inserted else { continue }
                 result.append(Candidate(
                     device: demo,
-                    name: DemoMode.name(for: demo.identifier) ?? DemoMode.deviceName
+                    name: DemoMode.name(for: demo.identifier) ?? DemoMode.deviceName,
+                    rssi: nil,
+                    detail: DemoMode.macAddress(for: demo.identifier) ?? demo.identifier.uuidString
                 ))
             }
         }

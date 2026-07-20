@@ -5,6 +5,17 @@ import MetaWear
 import MetaWearPersistence
 @testable import MetaWearApp
 
+/// The board picker's identity line depends on this mapping — a demo MAC
+/// must render in the usual big-endian colon form (wire order reversed).
+@MainActor
+struct DemoModeIdentityTests {
+    @Test func demoMACRendersBigEndianColonForm() {
+        #expect(DemoMode.macAddress(for: DemoBLETransport.deviceIdentifier)
+                == "DE:3D:0E:0D:E0:01")
+        #expect(DemoMode.macAddress(for: UUID()) == nil)
+    }
+}
+
 /// End-to-end group capture against the simulated fleet: real SDK
 /// connects, real logger round-trips through `DemoBLETransport`, real
 /// SwiftData persistence — only the radio is fake. This is the regression
