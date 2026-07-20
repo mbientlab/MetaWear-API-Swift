@@ -35,6 +35,15 @@ final class DownloadViewModel {
     var phase: Phase = .idle
     var lastError: AppError?
 
+    /// Mirrors the SDK's `mwLog` (stderr, DEBUG only) so decode outcomes
+    /// land in the same console as the wire log — field diagnosis of
+    /// "which record came up empty" must not require a debugger.
+    private static func debugLog(_ message: @autoclosure () -> String) {
+        #if DEBUG
+        fputs("[Download] \(message())\n", stderr)
+        #endif
+    }
+
     init(device: MetaWearDevice, store: MWPersistenceStore, containers: AppContainers,
          deviceName: String? = nil) {
         self.device = device
@@ -90,6 +99,12 @@ final class DownloadViewModel {
         let allEntries: [RawLogEntry]
         do {
             allEntries = try await drainRawDownload(expectEntries: true)
+            let perLogger = Dictionary(grouping: allEntries, by: \.id)
+                .mapValues(\.count)
+                .sorted { $0.key < $1.key }
+                .map { "id \($0.key): \($0.value)" }
+                .joined(separator: ", ")
+            Self.debugLog("drained \(allEntries.count) entries [\(perLogger)]")
         } catch {
             phase = .failed(message: error.localizedDescription)
             lastError = AppError(error: error)
@@ -107,13 +122,16 @@ final class DownloadViewModel {
                     info: info,
                     entries: allEntries
                 ) {
+                    Self.debugLog("\(record.sensorKind): saved \(snap.sampleCount) samples")
                     snapshots.append(snap)
                     record.status = .downloaded
                 } else {
+                    Self.debugLog("\(record.sensorKind): decoded EMPTY — record kept")
                     record.status = .stopped
                     keptBoardData = true
                 }
             } catch {
+                Self.debugLog("\(record.sensorKind): decode/save FAILED — \(error)")
                 record.status = .stopped
                 keptBoardData = true
                 lastError = AppError(error: error)
@@ -197,6 +215,7 @@ final class DownloadViewModel {
             var snapshots: [MWSessionSnapshot] = []
             for signal in signals {
                 let samples = try await device.decodeEntries(entries, for: signal)
+                Self.debugLog("foreign \(signal.identifier): \(samples.count) samples")
                 if let snap = try await save(anonymousSignal: signal, samples: samples, info: info) {
                     snapshots.append(snap)
                 }
