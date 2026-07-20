@@ -11,7 +11,6 @@ struct ScanView: View {
     /// detail column never re-appears in compact width.
     let showDetail: () -> Void
     @State private var viewModel: ScannerViewModel?
-    @State private var showGroupLogging = false
 
     private var pinnedID: UUID? {
         appStore.rememberedDevices.first?.peripheralUUID
@@ -178,17 +177,16 @@ struct ScanView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 // Group logging — log on several boards at once, MetaBase
                 // style. Badged red while a fleet is recording so the way
-                // back to Stop & Download stays discoverable.
-                Button {
-                    showGroupLogging = true
-                } label: {
+                // back to Stop & Download stays discoverable. VALUE-based
+                // push, deliberately: a screen presented via an
+                // isPresented destination can't resolve value links tapped
+                // inside it (the path doesn't contain the screen), which
+                // silently broke "View Saved Sessions" on the group page.
+                NavigationLink(value: DeviceFeaturePane.groupLogging) {
                     Label("Group Logging", systemImage: "square.stack.3d.down.right")
                 }
                 .tint(hasActiveGroup ? Palette.danger : nil)
             }
-        }
-        .navigationDestination(isPresented: $showGroupLogging) {
-            GroupLoggingView()
         }
         .task {
             if viewModel == nil {
@@ -196,12 +194,7 @@ struct ScanView: View {
             }
             viewModel?.startScan()
         }
-        .onDisappear {
-            // Group Logging (pushed from here) needs the shared scan alive
-            // for its nearby candidates — both screens drive the SAME
-            // MetaWearScanner, so stopping on push would freeze freshness.
-            if !showGroupLogging { viewModel?.stopScan() }
-        }
+        .onDisappear { viewModel?.stopScan() }
     }
 
     /// True while any pending session carries a group tag — a fleet is

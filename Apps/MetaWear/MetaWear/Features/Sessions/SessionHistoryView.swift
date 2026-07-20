@@ -31,7 +31,6 @@ struct SessionHistoryView: View {
             }
         }
         .navigationTitle("Session History")
-        .navigationDestination(for: MWSessionSnapshot.self) { SessionDetailView(snapshot: $0) }
         .overlay {
             if snapshots.isEmpty {
                 ContentUnavailableView("No sessions yet", systemImage: "clock", description: Text("Downloaded log sessions will appear here."))

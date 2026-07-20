@@ -1,5 +1,6 @@
 import SwiftUI
 import MetaWear
+import MetaWearPersistence
 
 struct RootView: View {
     @Environment(AppStore.self) private var appStore
@@ -21,6 +22,13 @@ struct RootView: View {
                 }
                 .navigationDestination(for: DeviceFeaturePane.self) { pane in
                     pane.destination()
+                }
+                // Declared ONCE at the stack root: SessionHistoryView can
+                // appear more than once per stack (scan-root link + the
+                // group screen's link), and per-instance declarations
+                // triggered SwiftUI's duplicate-destination warning.
+                .navigationDestination(for: MWSessionSnapshot.self) {
+                    SessionDetailView(snapshot: $0)
                 }
             }
         } detail: {
@@ -48,6 +56,9 @@ struct RootView: View {
                 }
                 .navigationDestination(for: DeviceFeaturePane.self) { pane in
                     pane.destination()
+                }
+                .navigationDestination(for: MWSessionSnapshot.self) {
+                    SessionDetailView(snapshot: $0)
                 }
             }
         }
@@ -176,6 +187,8 @@ enum DeviceFeaturePane: Hashable {
     case sensorConfig
     case liveStream([SensorSelection])
     case logSession
+    /// MetaBase-style multi-board logging — lives on the sidebar stack.
+    case groupLogging
     case download
     /// The Download screen in foreign-session mode: drains a board whose
     /// logging was started on another device via the anonymous-logger path.
@@ -191,6 +204,7 @@ enum DeviceFeaturePane: Hashable {
         case .sensorConfig:              SensorConfigView()
         case .liveStream(let sels):      LiveStreamView(selections: sels)
         case .logSession:                LogSessionView()
+        case .groupLogging:              GroupLoggingView()
         case .download:                  DownloadView()
         case .foreignDownload(let s):    DownloadView(foreign: s)
         case .sessionHistory:            SessionHistoryView()

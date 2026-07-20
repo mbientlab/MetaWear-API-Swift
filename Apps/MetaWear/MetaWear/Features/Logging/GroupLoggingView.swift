@@ -53,6 +53,11 @@ struct GroupLoggingView: View {
             if scanVM == nil { scanVM = ScannerViewModel(scanner: appStore.scanner) }
             scanVM?.startScan()
             appStore.refreshPendingLogSessions()
+            // ScanView stops the SHARED scan in its onDisappear, which
+            // fires AFTER this task during the push transition — re-assert
+            // once the transition settles so nearby candidates stay live.
+            try? await Task.sleep(for: .milliseconds(800))
+            scanVM?.startScan()
         }
         // Centered alert, not a confirmation dialog — dialogs anchor as
         // popovers in regular width and "pop up anywhere on the page"
