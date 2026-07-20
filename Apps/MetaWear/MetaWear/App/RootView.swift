@@ -145,8 +145,8 @@ private struct ErrorAndOrphanAlerts: ViewModifier {
             // so the user can decide what to do with it. The alert only
             // fires when LOG_LENGTH > 0 *and* we have no matching local
             // pending session — the in-app logging flow has its own UI
-            // for sessions it already knows about (LoggingPill,
-            // DownloadView).
+            // for sessions it already knows about (the Logging
+            // screen's status row, DownloadView).
             .alert(
                 "Logging in progress",
                 isPresented: Binding(
