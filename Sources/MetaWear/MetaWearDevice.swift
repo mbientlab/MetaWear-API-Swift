@@ -816,7 +816,7 @@ public actor MetaWearDevice {
             // below reflects every captured sample. Idempotent — safe to call even
             // if the user already invoked `flushLogPage()` explicitly. No-op on
             // pre-MMS firmware (revision < 3).
-            _ = try await flushLogPage()
+            let didFlush = try await flushLogPage()
 
             // Enable readout-notify and progress channels, then read the entry count.
             try await proto.write(MWPacket.command(.logging, 0x07, [0x01]))  // enable readout notify
@@ -828,11 +828,7 @@ public actor MetaWearDevice {
             let pageStream     = await proto.subscribe(to: .logging, register: 0x0D)
 
             // Read entry count, then start the download
-            let lengthResponse = try await proto.read(.logging, 0x05)
-            guard lengthResponse.count >= 6 else {
-                throw MWError.operationFailed("Log length response too short")
-            }
-            let nEntries = MWPacketParser.parseUInt32LE(lengthResponse, offset: 2)
+            let nEntries = try await settledLogLength(afterFlush: didFlush)
 
             // Empty log buffer: short-circuit. Issuing the readout with count=0
             // produces no `0x07` raw entries, no `0x0D` page-completed notice, and
@@ -1148,6 +1144,37 @@ public actor MetaWearDevice {
         }
         try await proto.write(MWPacket.command(.logging, 0x10, [0x01]))
         return true
+    }
+
+    /// Read LOG_LENGTH, waiting out the MMS's ASYNCHRONOUS page flush.
+    ///
+    /// The flush command returns immediately while the firmware copies the
+    /// in-RAM partial page to flash — an immediate read races that copy and
+    /// reports the PRE-flush count. Field evidence (two-board group collect,
+    /// 2026-07-19): a machine-speed stop→download read 0 entries on one
+    /// board and a stale page-aligned count on the other; both boards'
+    /// fresh samples were still in RAM and both downloads came back empty.
+    /// Human-paced solo flows always masked the race with navigation delays
+    /// between Stop and Download. Give the flush a head start, then poll
+    /// until two consecutive reads agree (bounded, ~2 s worst case).
+    private func settledLogLength(afterFlush didFlush: Bool) async throws -> UInt32 {
+        func readLength() async throws -> UInt32 {
+            let response = try await proto.read(.logging, 0x05)
+            guard response.count >= 6 else {
+                throw MWError.operationFailed("Log length response too short")
+            }
+            return MWPacketParser.parseUInt32LE(response, offset: 2)
+        }
+        guard didFlush else { return try await readLength() }
+        try await Task.sleep(for: .milliseconds(300))
+        var previous = try await readLength()
+        for _ in 0..<6 {
+            try await Task.sleep(for: .milliseconds(250))
+            let current = try await readLength()
+            if current == previous { return current }
+            previous = current
+        }
+        return previous
     }
 
     // MARK: - Logger recovery

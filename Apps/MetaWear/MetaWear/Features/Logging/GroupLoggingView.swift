@@ -58,15 +58,19 @@ struct GroupLoggingView: View {
             scanVM?.startScan()
             appStore.refreshPendingLogSessions()
         }
-        .confirmationDialog(
+        // Centered alert, not a confirmation dialog — dialogs anchor as
+        // popovers in regular width and "pop up anywhere on the page"
+        // (owner feedback); the app's convention is centered alerts for
+        // every confirm.
+        .alert(
             "Stop logging on all boards and download their data?",
-            isPresented: $showStopConfirm,
-            titleVisibility: .visible
+            isPresented: $showStopConfirm
         ) {
             Button("Stop & Download All") {
                 let members = activeGroupMembers
                 Task { await appStore.groupCapture.stopAndDownloadAll(members: members) }
             }
+            Button("Cancel", role: .cancel) {}
         } message: {
             Text("Each board is collected in turn. Boards that are out of range are skipped — their data stays on the board for later.")
         }
