@@ -311,6 +311,31 @@ public actor MetaWearDevice {
         mwLog("[Device] factoryReset: done")
     }
 
+    /// Reboot the board WITHOUT erasing anything. Flash-resident data —
+    /// log entries, macros — survives; volatile state (timers, events,
+    /// sensor enables, a wedged NAND housekeeping pass) is cleared, which
+    /// is the point: this is the unwedge for a misbehaving board when a
+    /// factory reset would cost real data. The link drops intentionally;
+    /// reconnect after ~1 s brings the board back.
+    public func restart() async throws {
+        mwLog("[Device] restart: \(identifier)")
+        guard state != .disconnected else {
+            throw MWError.invalidState("Cannot restart a disconnected device")
+        }
+        // Intentional link drop — same suppression + reset pair (and the
+        // same MMS fw-1.5.0 ResetAfterGC-no-op fallback) as factoryReset.
+        await proto.clearDisconnectHandler()
+        try await send(MWDebug.ResetAfterGC())
+        try? await send(MWDebug.Reset())
+        await proto.stop()
+        state = .disconnected
+        activeStreamKeys.removeAll()
+        activeFusionConfig = nil
+        loggerRegistry.removeAll()
+        logReferenceDate = nil
+        mwLog("[Device] restart: done")
+    }
+
     // MARK: - Streaming
 
     /// Stream a sensor signal continuously.
