@@ -195,7 +195,14 @@ struct GroupLoggingView: View {
                                 RSSIPill(dBm: rssi)
                             }
                         }
+                        // Row taps must span the whole cell, not just the
+                        // rendered text (same trap as the activity tiles).
+                        .contentShape(.rect)
                     }
+                    // Plain style, or the Form button tints the label and
+                    // the name renders brand-orange: hierarchical .primary
+                    // resolves against the button's tint, not label black.
+                    .buttonStyle(.plain)
                 }
             }
         } header: {
