@@ -19,6 +19,10 @@ struct DeviceSettingsView: View {
     @State private var activeLoggerCount: Int?
     @State private var isClearing = false
     @State private var clearLogError: AppError?
+    @State private var showClearMacrosConfirm = false
+    @State private var showClearEventsConfirm = false
+    @State private var showRestartConfirm = false
+    @State private var maintenanceError: AppError?
 
     var body: some View {
         Form {
@@ -67,6 +71,25 @@ struct DeviceSettingsView: View {
                 Text("Logging")
             } footer: {
                 Text("Stops any active logging, drops every entry from flash, and removes all logger subscriptions. Local pending sessions for this device are also deleted (their backing data on the board is gone).")
+            }
+
+            Section {
+                Button("Reset LED", systemImage: "lightbulb.slash") {
+                    Task { await resetLED() }
+                }
+                Button("Clear Macros", systemImage: "memorychip", role: .destructive) {
+                    showClearMacrosConfirm = true
+                }
+                Button("Clear Events & Timers", systemImage: "calendar.badge.minus", role: .destructive) {
+                    showClearEventsConfirm = true
+                }
+                Button("Restart Board", systemImage: "arrow.counterclockwise") {
+                    showRestartConfirm = true
+                }
+            } header: {
+                Text("Maintenance")
+            } footer: {
+                Text("Reset LED stops and clears the light immediately — if it relights after a disconnect, an on-board event is re-arming it; use Clear Events & Timers. Restart reboots the board without erasing logs or macros.")
             }
 
             Section {
@@ -120,6 +143,38 @@ struct DeviceSettingsView: View {
                 Text("Any logger subscriptions and pending entries will be removed from the board.")
             }
         }
+        .alert("Clear all macros on this board?",
+               isPresented: $showClearMacrosConfirm) {
+            Button("Clear Macros", role: .destructive) {
+                Task { await clearMacros() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes every on-boot macro — including the identity broadcast this app configures. The app re-applies its broadcast automatically on the next connect.")
+        }
+        .alert("Clear all events and timers?",
+               isPresented: $showClearEventsConfirm) {
+            Button("Clear Events & Timers", role: .destructive) {
+                Task { await clearEventsAndTimers() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes every on-board event binding and timer — from ALL apps, including this one's recording heartbeat. Use this if the LED keeps relighting after disconnects.")
+        }
+        .alert("Restart this MetaWear?",
+               isPresented: $showRestartConfirm) {
+            Button("Restart") {
+                Task { await restartBoard() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Reboots the board without erasing anything — logs and macros survive. The board will disconnect.")
+        }
+        .alert(item: $maintenanceError) { err in
+            Alert(title: Text("Maintenance failed"),
+                  message: Text(err.message),
+                  dismissButton: .default(Text("OK")))
+        }
         .alert(item: $clearLogError) { err in
             Alert(title: Text("Clear logs failed"),
                   message: Text(err.message),
@@ -167,6 +222,52 @@ struct DeviceSettingsView: View {
             activeLoggerCount = 0
         } catch {
             clearLogError = AppError(error: error)
+        }
+    }
+
+    // MARK: - Maintenance actions
+
+    /// Stop playback and clear all configured patterns. If the LED comes
+    /// back after a disconnect, an on-board disconnect EVENT is re-arming
+    /// it — that's what Clear Events & Timers is for.
+    private func resetLED() async {
+        guard let device = appStore.activeDevice else { return }
+        do {
+            try await device.stopLED(clearPattern: true)
+        } catch {
+            maintenanceError = AppError(error: error)
+        }
+    }
+
+    private func clearMacros() async {
+        guard let device = appStore.activeDevice else { return }
+        do {
+            try await device.eraseAllMacros()
+        } catch {
+            maintenanceError = AppError(error: error)
+        }
+    }
+
+    private func clearEventsAndTimers() async {
+        guard let device = appStore.activeDevice else { return }
+        do {
+            try await device.removeAllEvents()
+            try await device.removeAllTimers()
+        } catch {
+            maintenanceError = AppError(error: error)
+        }
+    }
+
+    /// Soft reboot — the board disconnects itself; the same intentional-
+    /// disconnect handling as Factory Reset takes the user back to the
+    /// scan list.
+    private func restartBoard() async {
+        guard let device = appStore.activeDevice else { return }
+        do {
+            try await device.restart()
+            await appStore.disconnect()
+        } catch {
+            maintenanceError = AppError(error: error)
         }
     }
 
