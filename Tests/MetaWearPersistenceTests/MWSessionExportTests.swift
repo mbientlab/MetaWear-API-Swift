@@ -36,7 +36,9 @@ struct MWSessionExportTests {
         let snap = try await store.saveSession(deviceID: UUID(), deviceInfo: makeDeviceInfo(),
                                                sensorKind: Quaternion.persistenceKind, samples: s)
         let table = try await store.exportTable(sessionID: snap.id, as: Quaternion.self)
-        #expect(table.columns == ["epoch", "elapsed_ms", "w", "x", "y", "z"])
+        // Raw components first, then the host-derived Euler convenience columns.
+        #expect(table.columns == ["epoch", "elapsed_ms", "w", "x", "y", "z",
+                                  "heading", "pitch", "roll"])
     }
 
     @Test func exportTable_rowCount_matchesSampleCount() async throws {

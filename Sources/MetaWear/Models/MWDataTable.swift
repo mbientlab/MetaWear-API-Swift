@@ -30,6 +30,18 @@ public protocol MWDataConvertible: Sendable {
     static var columnHeaders: [String] { get }
     /// String representation of each sensor-specific field, in the same order as `columnHeaders`.
     var columnValues: [String] { get }
+    /// Headers for host-computed convenience columns appended AFTER the raw
+    /// fields (e.g. Euler angles derived from a quaternion). Deriving at
+    /// export keeps the stored samples raw while sparing spreadsheet users
+    /// the quaternion math. Empty for types with nothing to derive.
+    static var derivedColumnHeaders: [String] { get }
+    /// Values parallel to `derivedColumnHeaders`.
+    var derivedColumnValues: [String] { get }
+}
+
+public extension MWDataConvertible {
+    static var derivedColumnHeaders: [String] { [] }
+    var derivedColumnValues: [String] { [] }
 }
 
 // MARK: - Conformances
@@ -46,6 +58,35 @@ extension Quaternion: MWDataConvertible {
     public var columnValues: [String] {
         [w.formatted(csv6Float), x.formatted(csv6Float),
          y.formatted(csv6Float), z.formatted(csv6Float)]
+    }
+    public static var derivedColumnHeaders: [String] { ["heading", "pitch", "roll"] }
+    public var derivedColumnValues: [String] {
+        let e = derivedEulerAngles
+        return [e.heading.formatted(csv4Float),
+                e.pitch.formatted(csv4Float),
+                e.roll.formatted(csv4Float)]
+    }
+}
+
+public extension Quaternion {
+    /// Euler angles computed from this quaternion (Tait-Bryan Z-Y-X, degrees):
+    /// heading normalized to 0..360°, pitch −90..+90°, roll −180..+180°.
+    ///
+    /// `yaw` is set equal to `heading`: the firmware's separate yaw channel is
+    /// gyroscope-INTEGRATED (unbounded, drifts) and cannot be reconstructed
+    /// from a single orientation quaternion. No derived-yaw CSV column is
+    /// emitted for the same reason — it would just duplicate heading.
+    var derivedEulerAngles: EulerAngles {
+        let w = Double(w), x = Double(x), y = Double(y), z = Double(z)
+        let roll  = atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+        let pitch = asin(min(1, max(-1, 2 * (w * y - z * x))))
+        let yaw   = atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+        var heading = yaw * 180 / .pi
+        if heading < 0 { heading += 360 }
+        return EulerAngles(heading: Float(heading),
+                           pitch:   Float(pitch * 180 / .pi),
+                           roll:    Float(roll * 180 / .pi),
+                           yaw:     Float(heading))
     }
 }
 
@@ -104,9 +145,10 @@ public extension MWDataTable {
         name: String
     ) -> MWDataTable {
         let iso = ISO8601DateFormatter()
-        let columns = ["epoch", "elapsed_ms"] + S.columnHeaders
+        let columns = ["epoch", "elapsed_ms"] + S.columnHeaders + S.derivedColumnHeaders
         let rows = samples.map { s -> [String] in
-            [iso.string(from: s.date), s.tickMs.formatted(csv3Double)] + s.value.columnValues
+            [iso.string(from: s.date), s.tickMs.formatted(csv3Double)]
+                + s.value.columnValues + s.value.derivedColumnValues
         }
         return MWDataTable(name: name, columns: columns, rows: rows)
     }
@@ -118,9 +160,9 @@ public extension MWDataTable {
         name: String
     ) -> MWDataTable {
         let iso = ISO8601DateFormatter()
-        let columns = ["epoch"] + S.columnHeaders
+        let columns = ["epoch"] + S.columnHeaders + S.derivedColumnHeaders
         let rows = samples.map { s -> [String] in
-            [iso.string(from: s.time)] + s.value.columnValues
+            [iso.string(from: s.time)] + s.value.columnValues + s.value.derivedColumnValues
         }
         return MWDataTable(name: name, columns: columns, rows: rows)
     }

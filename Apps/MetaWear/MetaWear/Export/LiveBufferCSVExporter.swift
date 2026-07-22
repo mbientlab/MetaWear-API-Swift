@@ -1,4 +1,5 @@
 import Foundation
+import MetaWear
 
 nonisolated enum LiveBufferCSVExporter {
 
@@ -50,15 +51,25 @@ nonisolated enum LiveBufferCSVExporter {
     private static func makeCSV(snapshot: ChannelSnapshot) -> String {
         let labels = snapshot.channelLabels
         let channelCount = labels.count
+        // Quaternion buffers get the same host-derived heading/pitch/roll
+        // columns as logged-session exports, via the SDK's derivation.
+        // Pattern match, not ==: the synthesized Equatable is MainActor-
+        // isolated under the app's default isolation and this exporter isn't.
+        let isQuaternion: Bool = if case .sensorFusion(.quaternion) = snapshot.key { true } else { false }
+        var header = ["time"] + labels
+        if isQuaternion { header += Quaternion.derivedColumnHeaders }
         var lines: [String] = []
         lines.reserveCapacity(snapshot.samples.count + 1)
-        lines.append((["time"] + labels).joined(separator: ","))
+        lines.append(header.joined(separator: ","))
         for s in snapshot.samples {
             var fields: [String] = [iso(s.time)]
             if channelCount > 0 { fields.append(format(s.f0)) }
             if channelCount > 1 { fields.append(format(s.f1)) }
             if channelCount > 2 { fields.append(format(s.f2)) }
             if channelCount > 3 { fields.append(format(s.f3)) }
+            if isQuaternion {
+                fields += Quaternion(w: s.f0, x: s.f1, y: s.f2, z: s.f3).derivedColumnValues
+            }
             lines.append(fields.joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
