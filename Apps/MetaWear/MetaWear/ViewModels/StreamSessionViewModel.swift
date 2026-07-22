@@ -33,8 +33,15 @@ final class StreamSessionViewModel {
     /// loop so the summary readout doesn't refresh on every individual
     /// sample append.
     var totalSamples: Int = 0
+    /// Latest fusion calibration accuracy, polled every 2 s while a fusion
+    /// channel streams. The read is only valid while fusion is RUNNING, which
+    /// is exactly when the badge shows. `nil` before the first response, on
+    /// non-fusion sessions, and on firmware without the calibration read
+    /// (sensor-fusion revision < 1).
+    private(set) var calibration: MWSensorFusionCalibration?
 
     private var streamTasks: [SensorKey: Task<Void, Never>] = [:]
+    private var calibrationTask: Task<Void, Never>?
     private var stopHandlers: [SensorKey: @Sendable () async throws -> Void] = [:]
     private var throttleTask: Task<Void, Never>?
     /// Selections last passed to `start(_:)`. Held so `resume()` can re-spawn
@@ -72,6 +79,7 @@ final class StreamSessionViewModel {
             await spawnStream(for: selection)
         }
         startThrottle()
+        startCalibrationPolling()
     }
 
     func stop() async {
@@ -81,6 +89,7 @@ final class StreamSessionViewModel {
         throttleTask = nil
 
         await tearDownStreams()
+        calibration = nil
         // Persist the captured buffers as part of Stop — not only in
         // `onDisappear`. Otherwise tapping Stop and then backgrounding or
         // killing the app (instead of navigating back) silently loses the
@@ -124,6 +133,7 @@ final class StreamSessionViewModel {
         for selection in selections {
             await spawnStream(for: selection)
         }
+        startCalibrationPolling()
     }
 
     func togglePause() {
@@ -150,6 +160,10 @@ final class StreamSessionViewModel {
     /// feeding the consume task with samples before cancellation actually
     /// took effect — symptom seen on the barometer.
     private func tearDownStreams() async {
+        // Calibration reads are meaningless once fusion stops sampling —
+        // end the poll with the streams (pause and resume respawn it).
+        calibrationTask?.cancel()
+        calibrationTask = nil
         for (_, stop) in stopHandlers {
             try? await stop()
         }
@@ -158,6 +172,35 @@ final class StreamSessionViewModel {
             task.cancel()
         }
         streamTasks.removeAll()
+    }
+
+    /// Poll the fusion calibration state while a fusion channel streams. The
+    /// badge this feeds is a courtesy readout: any failure just stops the
+    /// updates — it must never tear down the streams themselves.
+    private func startCalibrationPolling() {
+        calibrationTask?.cancel()
+        calibrationTask = nil
+        let streamsFusion = selections.contains {
+            if case .sensorFusion = $0.id { return true }
+            return false
+        }
+        guard streamsFusion else { return }
+        calibrationTask = Task { @MainActor [weak self] in
+            guard let device = self?.device else { return }
+            // The read exists from sensor-fusion revision 1 (C++
+            // CALIBRATION_REVISION); older firmware would let it time out.
+            guard let info = await device.modules[.sensorFusion],
+                  info.isPresent, info.revision >= 1 else { return }
+            do {
+                for try await sample in device.poll(MWSensorFusionCalibrationState(),
+                                                    every: .seconds(2)) {
+                    guard let self, self.isStreaming, !self.isPaused else { continue }
+                    self.calibration = sample.value
+                }
+            } catch {
+                // Silence is deliberate — see doc comment.
+            }
+        }
     }
 
     /// Terminate the session after a stream error (most commonly an
