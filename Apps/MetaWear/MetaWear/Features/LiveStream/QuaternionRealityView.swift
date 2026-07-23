@@ -34,7 +34,13 @@ struct QuaternionRealityView: View {
             content.camera = .virtual
         } update: { content in
             guard let latest, let entity = content.entities.first else { return }
-            let q = simd_quatf(ix: latest.f1, iy: latest.f2, iz: latest.f3, r: latest.f0)
+            let raw = simd_quatf(ix: latest.f1, iy: latest.f2, iz: latest.f3, r: latest.f0)
+            guard raw.length > 0.5 else { return }   // malformed/zero sample
+            // Change of basis, NOT a pre-multiply: M·q·M⁻¹ re-expresses the
+            // rotation in the scene's frame while leaving the rest pose
+            // untouched (identity conjugates to identity) — hardware-verified
+            // that the rest pose was right while the axes were switched.
+            let q = Self.sensorToScene * simd_normalize(raw) * Self.sensorToScene.inverse
             if reduceMotion {
                 entity.orientation = q
             } else {
@@ -52,6 +58,15 @@ struct QuaternionRealityView: View {
         .glassCard()
         .accessibilityLabel("3D orientation of the device")
     }
+
+    /// Maps the sensor's world frame onto RealityKit's. The fusion quaternion
+    /// lives in a Z-up world (Bosch NDoF: Z = gravity-up, X/Y magnetic-
+    /// referenced) with body axes matching the CAD case (X width, Y length,
+    /// Z out the top face). RealityKit is Y-up with Z toward the camera.
+    /// Rotating −90° about X sends Earth-up (Z) to screen-up (Y) and north
+    /// (Y) into the screen, so physical yaw spins the model about the
+    /// screen's vertical and pitch/roll follow the axes you'd expect.
+    private static let sensorToScene = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
 
     /// Build the entity placed at scene origin. If a `MetaMotion.usdz` resource
     /// ships in the bundle it's loaded and re-centered; otherwise we build a
