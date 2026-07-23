@@ -47,7 +47,7 @@ struct QuaternionRealityView: View {
             }
         }
         .containerRelativeFrame(.vertical, alignment: .center) { length, _ in
-            max(280, length * (isCompact ? 0.55 : 0.45))
+            max(240, length * (isCompact ? 0.42 : 0.35))
         }
         .glassCard()
         .accessibilityLabel("3D orientation of the device")
