@@ -103,14 +103,17 @@ struct QuaternionRealityView: View {
     /// — so with the right M, the model does exactly what the physical
     /// board does, for ANY tare pose.
     ///
-    /// Hardware round 4 fixed M: with identity, rotation about the face
-    /// normal tracked flawlessly while pitch and roll ran BACKWARDS —
-    /// i.e. the sensor's X and Y axes run opposite the case axes the model
-    /// is authored in (the IMU is mounted rotated 180° about the face
-    /// normal inside the case). Mapping axes through diag(−1,−1,1) is
-    /// exactly the 180°-about-Z rotation. Proper (det +1), so no mirror
-    /// artifacts, and Δ = identity still renders face-on.
-    private static let bodyToScene = simd_quatf(ix: 0, iy: 0, iz: 1, r: 0)
+    /// Hardware rounds 4–5 fixed M: rotation about the face normal tracks
+    /// flawlessly under any Z-preserving map, but pitch and roll rendered
+    /// SWAPPED with each other (front-back rock displayed as left-right
+    /// rock) — the IMU chip is mounted rotated 90° about the face normal
+    /// inside the case, so chip X lies along the case's length. M is the
+    /// 90°-about-Z rotation carrying chip axes onto the case axes the
+    /// model is authored in. The SIGN of the 90° is not derivable from
+    /// docs (no PCB axis diagram exists); if hardware shows front-back
+    /// and left-right on the correct axes but with inverted direction,
+    /// flip iz to −0.7071068 — that is the final free parameter.
+    private static let bodyToScene = simd_quatf(ix: 0, iy: 0, iz: 0.7071068, r: 0.7071068)
 
     /// Build the entity placed at scene origin. If a `MetaMotion.usdz` resource
     /// ships in the bundle it's loaded and re-centered; otherwise we build a
