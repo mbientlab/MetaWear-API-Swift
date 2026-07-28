@@ -428,7 +428,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 10.0;
+				MARKETING_VERSION = 10.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearApp;
 				PRODUCT_MODULE_NAME = MetaWearApp;
 				PRODUCT_NAME = MetaWearApp;
@@ -465,7 +465,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 10.0;
+				MARKETING_VERSION = 10.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mbientlab.MetaWearApp;
 				PRODUCT_MODULE_NAME = MetaWearApp;
 				PRODUCT_NAME = MetaWearApp;
