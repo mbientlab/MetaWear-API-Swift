@@ -7,10 +7,27 @@ import MetaWear
 /// Loads `MetaMotion.usdz` from the app bundle when present. Otherwise it uses
 /// a procedural MetaMotion-style rectangular board so the live orientation view
 /// still reads as real MetaWear hardware.
+///
+/// ## Why the display is TARED (relative to a reference pose)
+/// Three hardware sessions proved the fusion quaternion's absolute frame
+/// cannot be trusted as a fixed constant: axis-isolated motions landed on
+/// DIFFERENT quaternion components across sessions, which no fixed remap can
+/// explain (heading is magnetic-referenced and the world frame is not stable
+/// session-to-session). So the view renders the rotation SINCE a reference
+/// sample instead: `Δ = ref⁻¹ · q` is the board's motion expressed in the
+/// reference pose's own body axes — magnetic north, the session's world
+/// frame, and the convention ambiguity all cancel. The reference defaults to
+/// the first sample (the board starts face-on), and the Zero button lets the
+/// user re-anchor at any time — hold the board facing the screen, tap Zero,
+/// and the model mirrors every motion from there.
 struct QuaternionRealityView: View {
     let latest: AnyChartSample?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    /// Tare pose: motion renders relative to this sample. Captured from the
+    /// first valid sample, replaced when the user taps Zero.
+    @State private var reference: simd_quatf?
 
     private var isCompact: Bool { horizontalSizeClass == .compact }
 
@@ -34,7 +51,13 @@ struct QuaternionRealityView: View {
             content.camera = .virtual
         } update: { content in
             guard let latest, let entity = content.entities.first else { return }
-            let q = simd_quatf(ix: latest.f1, iy: latest.f2, iz: latest.f3, r: latest.f0)
+            let raw = simd_quatf(ix: latest.f1, iy: latest.f2, iz: latest.f3, r: latest.f0)
+            guard raw.length > 0.5 else { return }   // malformed/zero sample
+            // Motion since the tare pose, in the tare pose's body axes.
+            let delta = (reference ?? simd_normalize(raw)).inverse * simd_normalize(raw)
+            // Change of basis M·Δ·M⁻¹ re-expresses that motion in the
+            // scene's frame; at the tare pose Δ = identity → face-on.
+            let q = Self.bodyToScene * delta * Self.bodyToScene.inverse
             if reduceMotion {
                 entity.orientation = q
             } else {
@@ -47,11 +70,50 @@ struct QuaternionRealityView: View {
             }
         }
         .containerRelativeFrame(.vertical, alignment: .center) { length, _ in
-            max(280, length * (isCompact ? 0.55 : 0.45))
+            max(240, length * (isCompact ? 0.42 : 0.35))
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if latest != nil {
+                Button("Zero", systemImage: "scope") {
+                    if let latest {
+                        let raw = simd_quatf(ix: latest.f1, iy: latest.f2, iz: latest.f3, r: latest.f0)
+                        if raw.length > 0.5 { reference = simd_normalize(raw) }
+                    }
+                }
+                .buttonStyle(.glass)
+                .font(.caption.weight(.medium))
+                .padding(10)
+                .accessibilityHint("Anchor the 3D board to the device's current orientation")
+            }
+        }
+        .onChange(of: latest?.id) {
+            // Default tare: the first valid sample of the stream/replay, so
+            // the board starts face-on without the user doing anything.
+            guard reference == nil, let latest else { return }
+            let raw = simd_quatf(ix: latest.f1, iy: latest.f2, iz: latest.f3, r: latest.f0)
+            if raw.length > 0.5 { reference = simd_normalize(raw) }
         }
         .glassCard()
         .accessibilityLabel("3D orientation of the device")
     }
+
+    /// Maps tare-body (sensor) axes onto the model's case axes. Body-axis
+    /// motions right-multiply the tared delta (Δ → Δ·Δb), which the display
+    /// composes as a rotation about the MODEL'S axis M·b in its local frame
+    /// — so with the right M, the model does exactly what the physical
+    /// board does, for ANY tare pose.
+    ///
+    /// Hardware rounds 4–5 fixed M: rotation about the face normal tracks
+    /// flawlessly under any Z-preserving map, but pitch and roll rendered
+    /// SWAPPED with each other (front-back rock displayed as left-right
+    /// rock) — the IMU chip is mounted rotated 90° about the face normal
+    /// inside the case, so chip X lies along the case's length. M is the
+    /// 90°-about-Z rotation carrying chip axes onto the case axes the
+    /// model is authored in. The SIGN of the 90° is not derivable from
+    /// docs (no PCB axis diagram exists); if hardware shows front-back
+    /// and left-right on the correct axes but with inverted direction,
+    /// flip iz to −0.7071068 — that is the final free parameter.
+    private static let bodyToScene = simd_quatf(ix: 0, iy: 0, iz: 0.7071068, r: 0.7071068)
 
     /// Build the entity placed at scene origin. If a `MetaMotion.usdz` resource
     /// ships in the bundle it's loaded and re-centered; otherwise we build a

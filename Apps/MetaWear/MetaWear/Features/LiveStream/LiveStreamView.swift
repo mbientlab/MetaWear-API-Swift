@@ -21,6 +21,9 @@ struct LiveStreamView: View {
                 if let viewModel, let startedAt = viewModel.startedAt {
                     SessionStatsBar(startedAt: startedAt, totalSamples: viewModel.totalSamples)
                 }
+                if let calibration = viewModel?.calibration {
+                    FusionCalibrationBadge(calibration: calibration)
+                }
                 GlassEffectContainer {
                     if let viewModel {
                         ForEach(viewModel.channels) { channel in

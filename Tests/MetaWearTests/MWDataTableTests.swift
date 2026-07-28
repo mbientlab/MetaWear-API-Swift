@@ -36,6 +36,65 @@ struct MWDataConvertibleTests {
         #expect(vals[1] == "0.000000")
     }
 
+    // MARK: Quaternion → derived Euler columns
+
+    @Test func quaternion_derivedHeaders() {
+        #expect(Quaternion.derivedColumnHeaders == ["heading", "pitch", "roll"])
+    }
+
+    @Test func quaternion_identity_derivesZeroAngles() {
+        let e = Quaternion(w: 1, x: 0, y: 0, z: 0).derivedEulerAngles
+        #expect(abs(e.heading) < 0.01)
+        #expect(abs(e.pitch) < 0.01)
+        #expect(abs(e.roll) < 0.01)
+    }
+
+    // Axis convention is matched to the firmware's own Euler output
+    // (paired-capture validated on hardware): heading = classic yaw about
+    // z; pitch = NEGATED classic roll about x; roll = NEGATED classic
+    // pitch about y.
+
+    @Test func quaternion_90degAboutZ_readsAsHeading90() {
+        // w = cos(45°), z = sin(45°)
+        let q = Quaternion(w: 0.7071068, x: 0, y: 0, z: 0.7071068)
+        let e = q.derivedEulerAngles
+        #expect(abs(e.heading - 90) < 0.01)
+        #expect(abs(e.pitch) < 0.01)
+    }
+
+    @Test func quaternion_90degAboutX_readsAsPitchMinus90() {
+        let q = Quaternion(w: 0.7071068, x: 0.7071068, y: 0, z: 0)
+        let e = q.derivedEulerAngles
+        #expect(abs(e.pitch - (-90)) < 0.01)
+        #expect(abs(e.roll) < 0.01)
+    }
+
+    @Test func quaternion_90degAboutY_readsAsRollMinus90() {
+        // This is also the gimbal pole for the asin-bounded roll angle:
+        // the sin argument hits ±1 exactly and must clamp without NaN.
+        let q = Quaternion(w: 0.7071068, x: 0, y: 0.7071068, z: 0)
+        let e = q.derivedEulerAngles
+        #expect(abs(e.roll - (-90)) < 0.01)
+        #expect(!e.heading.isNaN && !e.pitch.isNaN)
+    }
+
+    @Test func quaternion_negativeYaw_normalizesHeadingInto0To360() {
+        // −90° about the vertical (quat Z): w = cos(−45°), z = sin(−45°)
+        let q = Quaternion(w: 0.7071068, x: 0, y: 0, z: -0.7071068)
+        #expect(abs(q.derivedEulerAngles.heading - 270) < 0.01)
+    }
+
+    @Test func quaternion_derivedValues_useFourDecimalEulerFormat() {
+        let vals = Quaternion(w: 1, x: 0, y: 0, z: 0).derivedColumnValues
+        #expect(vals == ["0.0000", "0.0000", "0.0000"])
+    }
+
+    @Test func nonQuaternion_hasNoDerivedColumns() {
+        #expect(CartesianFloat.derivedColumnHeaders.isEmpty)
+        #expect(EulerAngles.derivedColumnHeaders.isEmpty)
+        #expect(CartesianFloat(x: 1, y: 2, z: 3).derivedColumnValues.isEmpty)
+    }
+
     // MARK: EulerAngles
 
     @Test func eulerAngles_headers() {
@@ -143,6 +202,23 @@ struct MWDataTableFactoryTests {
     @Test func logged_rowColumnCount_matchesHeaders() {
         let s = MWLoggedSample(date: Date(), tickMs: 0, value: Quaternion(w: 1, x: 0, y: 0, z: 0))
         let table = MWDataTable.from(logged: [s], name: "t")
+        #expect(table.rows[0].count == table.columns.count)
+    }
+
+    @Test func logged_quaternion_appendsDerivedEulerColumns() {
+        // 90° about the vertical axis (quat Z) → heading column reads 90.
+        let s = MWLoggedSample(date: Date(timeIntervalSince1970: 0), tickMs: 0,
+                               value: Quaternion(w: 0.7071068, x: 0, y: 0, z: 0.7071068))
+        let table = MWDataTable.from(logged: [s], name: "t")
+        #expect(table.columns == ["epoch", "elapsed_ms", "w", "x", "y", "z", "heading", "pitch", "roll"])
+        #expect(table.rows[0][6] == "90.0000")
+    }
+
+    @Test func streamed_quaternion_appendsDerivedEulerColumns() {
+        let samples = [Timestamped(time: Date(timeIntervalSince1970: 0),
+                                   value: Quaternion(w: 1, x: 0, y: 0, z: 0))]
+        let table = MWDataTable.from(streamed: samples, name: "t")
+        #expect(table.columns == ["epoch", "w", "x", "y", "z", "heading", "pitch", "roll"])
         #expect(table.rows[0].count == table.columns.count)
     }
 }

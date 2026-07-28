@@ -7,6 +7,10 @@ struct SessionDetailView: View {
     let snapshot: MWSessionSnapshot
     @Environment(AppStore.self) private var appStore
     @State private var preview: [AnyChartSample] = []
+    /// Full-resolution samples + board-tick timeline for the 3D replay.
+    /// Only populated for quaternion sessions with enough samples to scrub.
+    @State private var replaySamples: [AnyChartSample] = []
+    @State private var replayTimeline: ReplayTimeline?
     @State private var lastError: AppError?
     @State private var exportResult: ExportResult?
 
@@ -14,6 +18,9 @@ struct SessionDetailView: View {
         ScrollView {
             VStack(spacing: 16) {
                 statsCard
+                if let replayTimeline, !replaySamples.isEmpty {
+                    SessionReplayView(samples: replaySamples, timeline: replayTimeline)
+                }
                 if !preview.isEmpty {
                     SensorChartView(
                         title: snapshot.label ?? snapshot.sensorKind.capitalized,
@@ -21,7 +28,11 @@ struct SessionDetailView: View {
                         samples: preview,
                         latest: preview.last,
                         effectiveHz: 0,
-                        axisStyle: .generic(channelCount: Int(preview.first?.channelCount ?? 1))
+                        axisStyle: .forSession(
+                            sensorKind: snapshot.sensorKind,
+                            label: snapshot.label,
+                            channelCount: Int(preview.first?.channelCount ?? 1)
+                        )
                     )
                 }
                 Button("Export CSV", systemImage: "square.and.arrow.up") {
@@ -65,6 +76,10 @@ struct SessionDetailView: View {
             case Quaternion.persistenceKind:
                 let samples = try await appStore.persistence.fetchSamples(sessionID: snapshot.id, as: Quaternion.self)
                 preview = samples.suffix(600).map(AnyChartSample.from)
+                if samples.count >= 2 {
+                    replaySamples = samples.map(AnyChartSample.from)
+                    replayTimeline = ReplayTimeline(ticksMs: samples.map(\.tickMs))
+                }
             case EulerAngles.persistenceKind:
                 let samples = try await appStore.persistence.fetchSamples(sessionID: snapshot.id, as: EulerAngles.self)
                 preview = samples.suffix(600).map(AnyChartSample.from)
