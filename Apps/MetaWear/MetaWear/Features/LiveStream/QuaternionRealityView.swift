@@ -97,18 +97,20 @@ struct QuaternionRealityView: View {
         .accessibilityLabel("3D orientation of the device")
     }
 
-    /// Maps tare-body axes onto the model. IDENTITY is the correct value,
-    /// not a placeholder: a physical rotation about a board body axis b
-    /// right-multiplies the tared delta (Δ → Δ·Δb), which the display
-    /// composes as a rotation about the MODEL'S OWN axis M·b in its local
-    /// frame. The model is authored with its case axes = the board's case
-    /// axes (X width, Y length, Z out the top face), so M = identity makes
-    /// the model do exactly what the physical board does — spin it about
-    /// its face normal and the model spins about ITS face normal — for ANY
-    /// tare pose. This invariant is what the fixed-frame attempts could
-    /// never provide. Kept as a named constant so any residual mirror found
-    /// on hardware is a one-line fix here.
-    private static let bodyToScene = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    /// Maps tare-body (sensor) axes onto the model's case axes. Body-axis
+    /// motions right-multiply the tared delta (Δ → Δ·Δb), which the display
+    /// composes as a rotation about the MODEL'S axis M·b in its local frame
+    /// — so with the right M, the model does exactly what the physical
+    /// board does, for ANY tare pose.
+    ///
+    /// Hardware round 4 fixed M: with identity, rotation about the face
+    /// normal tracked flawlessly while pitch and roll ran BACKWARDS —
+    /// i.e. the sensor's X and Y axes run opposite the case axes the model
+    /// is authored in (the IMU is mounted rotated 180° about the face
+    /// normal inside the case). Mapping axes through diag(−1,−1,1) is
+    /// exactly the 180°-about-Z rotation. Proper (det +1), so no mirror
+    /// artifacts, and Δ = identity still renders face-on.
+    private static let bodyToScene = simd_quatf(ix: 0, iy: 0, iz: 1, r: 0)
 
     /// Build the entity placed at scene origin. If a `MetaMotion.usdz` resource
     /// ships in the bundle it's loaded and re-centered; otherwise we build a
