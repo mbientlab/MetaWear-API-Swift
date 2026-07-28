@@ -49,38 +49,39 @@ struct MWDataConvertibleTests {
         #expect(abs(e.roll) < 0.01)
     }
 
-    // Axis convention is the hardware-established frame: vertical = quat X
-    // (heading), lateral = quat Z (pitch), longitudinal = quat Y (roll).
+    // Axis convention is matched to the firmware's own Euler output
+    // (paired-capture validated on hardware): heading = classic yaw about
+    // z; pitch = NEGATED classic roll about x; roll = NEGATED classic
+    // pitch about y.
 
-    @Test func quaternion_90degAboutX_readsAsHeading90() {
-        // w = cos(45°), x = sin(45°)
-        let q = Quaternion(w: 0.7071068, x: 0.7071068, y: 0, z: 0)
+    @Test func quaternion_90degAboutZ_readsAsHeading90() {
+        // w = cos(45°), z = sin(45°)
+        let q = Quaternion(w: 0.7071068, x: 0, y: 0, z: 0.7071068)
         let e = q.derivedEulerAngles
         #expect(abs(e.heading - 90) < 0.01)
         #expect(abs(e.pitch) < 0.01)
     }
 
-    @Test func quaternion_90degAboutY_readsAsRoll90() {
+    @Test func quaternion_90degAboutX_readsAsPitchMinus90() {
+        let q = Quaternion(w: 0.7071068, x: 0.7071068, y: 0, z: 0)
+        let e = q.derivedEulerAngles
+        #expect(abs(e.pitch - (-90)) < 0.01)
+        #expect(abs(e.roll) < 0.01)
+    }
+
+    @Test func quaternion_90degAboutY_readsAsRollMinus90() {
+        // This is also the gimbal pole for the asin-bounded roll angle:
+        // the sin argument hits ±1 exactly and must clamp without NaN.
         let q = Quaternion(w: 0.7071068, x: 0, y: 0.7071068, z: 0)
         let e = q.derivedEulerAngles
-        #expect(abs(e.roll - 90) < 0.01)
-        #expect(abs(e.pitch) < 0.01)
-        #expect(abs(e.heading) < 0.01)
+        #expect(abs(e.roll - (-90)) < 0.01)
+        #expect(!e.heading.isNaN && !e.pitch.isNaN)
     }
 
     @Test func quaternion_negativeYaw_normalizesHeadingInto0To360() {
-        // −90° about the vertical (quat X): w = cos(−45°), x = sin(−45°)
-        let q = Quaternion(w: 0.7071068, x: -0.7071068, y: 0, z: 0)
+        // −90° about the vertical (quat Z): w = cos(−45°), z = sin(−45°)
+        let q = Quaternion(w: 0.7071068, x: 0, y: 0, z: -0.7071068)
         #expect(abs(q.derivedEulerAngles.heading - 270) < 0.01)
-    }
-
-    @Test func quaternion_gimbalPole_pitchClampsWithoutNaN() {
-        // 90° about the lateral axis (quat Z) is the pitch pole: the
-        // sin(pitch) argument hits ±1 exactly.
-        let q = Quaternion(w: 0.7071068, x: 0, y: 0, z: 0.7071068)
-        let e = q.derivedEulerAngles
-        #expect(abs(e.pitch - 90) < 0.01)
-        #expect(!e.heading.isNaN && !e.roll.isNaN)
     }
 
     @Test func quaternion_derivedValues_useFourDecimalEulerFormat() {
@@ -205,10 +206,9 @@ struct MWDataTableFactoryTests {
     }
 
     @Test func logged_quaternion_appendsDerivedEulerColumns() {
-        // 90° about the vertical axis (quat X in the hardware-established
-        // frame) → heading column reads 90.
+        // 90° about the vertical axis (quat Z) → heading column reads 90.
         let s = MWLoggedSample(date: Date(timeIntervalSince1970: 0), tickMs: 0,
-                               value: Quaternion(w: 0.7071068, x: 0.7071068, y: 0, z: 0))
+                               value: Quaternion(w: 0.7071068, x: 0, y: 0, z: 0.7071068))
         let table = MWDataTable.from(logged: [s], name: "t")
         #expect(table.columns == ["epoch", "elapsed_ms", "w", "x", "y", "z", "heading", "pitch", "roll"])
         #expect(table.rows[0][6] == "90.0000")
