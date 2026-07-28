@@ -66,11 +66,13 @@ struct QuaternionRealityView: View {
     ///   yaw (spin flat on desk) rotates about quat X,
     ///   pitch (tip the far edge) rotates about quat Z,
     ///   roll rotates about quat Y.
-    /// RealityKit is Y-up with Z toward the camera, so the cyclic map
-    /// X→Y, Y→Z, Z→X (a 120° turn about the (1,1,1) diagonal) sends yaw to
-    /// the screen's vertical, pitch to its horizontal, and roll to the
-    /// in-plane steering-wheel axis. Trust the radio over the docs.
-    private static let sensorToScene = simd_quatf(ix: 0.5, iy: 0.5, iz: 0.5, r: 0.5)
+    /// RealityKit is Y-up with Z toward the camera. The plain cyclic map
+    /// X→Y, Y→Z, Z→X put every motion on the right axis but hardware round 2
+    /// showed yaw and pitch MIRRORED (roll correct) — so those two images
+    /// flip sign: X→−Y, Z→−X, Y→Z. Two flips keep it a proper rotation
+    /// (the 120° turn about the (1,−1,−1) diagonal). Trust the radio over
+    /// the docs.
+    private static let sensorToScene = simd_quatf(ix: 0.5, iy: -0.5, iz: -0.5, r: 0.5)
 
     /// Build the entity placed at scene origin. If a `MetaMotion.usdz` resource
     /// ships in the bundle it's loaded and re-centered; otherwise we build a
