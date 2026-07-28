@@ -69,8 +69,15 @@ extension Quaternion: MWDataConvertible {
 }
 
 public extension Quaternion {
-    /// Euler angles computed from this quaternion (Tait-Bryan Z-Y-X, degrees):
+    /// Euler angles computed from this quaternion (Tait-Bryan, degrees):
     /// heading normalized to 0..360°, pitch −90..+90°, roll −180..+180°.
+    ///
+    /// Axis convention established EMPIRICALLY on hardware (fw 1.7.x NDoF):
+    /// the board's vertical axis lives in the quaternion's `x` component,
+    /// with the lateral (pitch) axis in `z` and the longitudinal (roll)
+    /// axis in `y` — verified with axis-isolated motions on a real board,
+    /// against docs that imply a Z-up frame. The formulas below are the
+    /// standard ZYX derivation with components relabeled to that frame.
     ///
     /// `yaw` is set equal to `heading`: the firmware's separate yaw channel is
     /// gyroscope-INTEGRATED (unbounded, drifts) and cannot be reconstructed
@@ -78,9 +85,9 @@ public extension Quaternion {
     /// emitted for the same reason — it would just duplicate heading.
     var derivedEulerAngles: EulerAngles {
         let w = Double(w), x = Double(x), y = Double(y), z = Double(z)
-        let roll  = atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
-        let pitch = asin(min(1, max(-1, 2 * (w * y - z * x))))
-        let yaw   = atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+        let roll  = atan2(2 * (w * y + z * x), 1 - 2 * (y * y + z * z))
+        let pitch = asin(min(1, max(-1, 2 * (w * z - x * y))))
+        let yaw   = atan2(2 * (w * x + y * z), 1 - 2 * (z * z + x * x))
         var heading = yaw * 180 / .pi
         if heading < 0 { heading += 360 }
         return EulerAngles(heading: Float(heading),

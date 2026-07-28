@@ -59,14 +59,18 @@ struct QuaternionRealityView: View {
         .accessibilityLabel("3D orientation of the device")
     }
 
-    /// Maps the sensor's world frame onto RealityKit's. The fusion quaternion
-    /// lives in a Z-up world (Bosch NDoF: Z = gravity-up, X/Y magnetic-
-    /// referenced) with body axes matching the CAD case (X width, Y length,
-    /// Z out the top face). RealityKit is Y-up with Z toward the camera.
-    /// Rotating −90° about X sends Earth-up (Z) to screen-up (Y) and north
-    /// (Y) into the screen, so physical yaw spins the model about the
-    /// screen's vertical and pitch/roll follow the axes you'd expect.
-    private static let sensorToScene = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
+    /// Maps the sensor's quaternion frame onto RealityKit's. Established
+    /// EMPIRICALLY on hardware (fw 1.7.x NDoF), not from Bosch's docs — the
+    /// docs imply a Z-up frame, but three axis-isolated motions proved the
+    /// board's vertical lives in the quaternion's X component:
+    ///   yaw (spin flat on desk) rotates about quat X,
+    ///   pitch (tip the far edge) rotates about quat Z,
+    ///   roll rotates about quat Y.
+    /// RealityKit is Y-up with Z toward the camera, so the cyclic map
+    /// X→Y, Y→Z, Z→X (a 120° turn about the (1,1,1) diagonal) sends yaw to
+    /// the screen's vertical, pitch to its horizontal, and roll to the
+    /// in-plane steering-wheel axis. Trust the radio over the docs.
+    private static let sensorToScene = simd_quatf(ix: 0.5, iy: 0.5, iz: 0.5, r: 0.5)
 
     /// Build the entity placed at scene origin. If a `MetaMotion.usdz` resource
     /// ships in the bundle it's loaded and re-centered; otherwise we build a
