@@ -6,13 +6,47 @@ import Foundation
 /// `@MainActor` isolation ensures all mutations to `discoveredDevices` and `isScanning`
 /// happen on the main thread — safe to bind directly to SwiftUI views via `@Observable`.
 /// One scanner per app; each discovered peripheral gets its own isolated transport.
+///
+/// The scanner runs in one of two modes at a time (`scanMode`):
+///   • `.metaWear` — the default. Application-mode boards populate
+///     `discoveredDevices`; MetaBoot advertisements are ignored.
+///   • `.metaBoot` — bootloader-mode boards populate
+///     `discoveredMetaBootDevices`; application-mode ads are ignored.
+///
+/// Only one mode's devices are ever visible at once. The underlying
+/// CoreBluetooth scan is a single session shared across modes — switching
+/// mode is just re-gating which advertisements produce vended entries.
+/// Ambient side-effect caches (`advertisedNames`, `advertisementRSSI`,
+/// `advertisedMACs`, `advertisementLastSeen`, `advertisementManufacturerData`)
+/// keep updating from EVERY observed advertisement regardless of mode so
+/// remembered-device / rename / MAC-broadcast workflows work uninterrupted.
 @Observable
 @MainActor
 public final class MetaWearScanner {
 
+    // MARK: - Scan mode
+
+    /// Which class of MetaWear advertisement the scanner surfaces into its
+    /// vended device dictionaries. See the class documentation for details.
+    public enum ScanMode: Sendable, Equatable {
+        /// Application-mode boards (default). Populates `discoveredDevices`.
+        case metaWear
+        /// Bootloader-mode boards. Populates `discoveredMetaBootDevices`.
+        case metaBoot
+    }
+
+    /// Current scan mode. Change via `setScanMode(_:)`.
+    public private(set) var scanMode: ScanMode = .metaWear
+
     // MARK: - Public state
 
     public private(set) var discoveredDevices: [UUID: MetaWearDevice] = [:]
+
+    /// MetaBoot-mode boards discovered while `scanMode == .metaBoot`.
+    /// Only populated in that mode — application-mode ads never appear
+    /// here, and this dictionary is cleared when leaving MetaBoot mode.
+    public private(set) var discoveredMetaBootDevices: [UUID: MetaBootAdvertisement] = [:]
+
     public private(set) var isScanning = false
 
     /// Most-recently-seen advertised local name for each peripheral UUID the
@@ -157,30 +191,113 @@ public final class MetaWearScanner {
                     }
                 }
                 mwLogVerbose("[Scanner] discovered: \(id) name='\(name)'")
-                guard Self.isMetaWearAdvertisement(
-                    name: name,
-                    serviceUUIDs: result.serviceUUIDs,
-                    manufacturerData: result.manufacturerData
-                ) else { continue }
-                guard self.discoveredDevices[id] == nil else { continue }
-                mwLog("[Scanner] new MetaWear device: \(id)")
-                if let cached = self.knownDevices.removeValue(forKey: id) {
-                    // Promote the known-peripheral instance instead of minting
-                    // a twin. Two MetaWearDevice instances for one UUID means
-                    // two transports fighting over MWCentralManager's per-UUID
-                    // callback routing — the loser's connection goes dark (its
-                    // didDisconnect is never delivered). With several
-                    // remembered boards reconnecting while a scan runs, that
-                    // race would be routine.
-                    self.discoveredDevices[id] = cached
-                } else {
-                    let transport = CoreBluetoothPeripheralTransport(
+                // Route the advertisement to the mode-specific vended
+                // dictionary. Ambient caches above kept updating regardless
+                // — this gate only decides whether the ad becomes a
+                // vended device entry. Ads for the other mode are dropped
+                // silently.
+                switch self.scanMode {
+                case .metaWear:
+                    guard Self.isMetaWearAdvertisement(
+                        name: name,
+                        serviceUUIDs: result.serviceUUIDs,
+                        manufacturerData: result.manufacturerData
+                    ) else { continue }
+                    guard self.discoveredDevices[id] == nil else { continue }
+                    mwLog("[Scanner] new MetaWear device: \(id)")
+                    if let cached = self.knownDevices.removeValue(forKey: id) {
+                        // Promote the known-peripheral instance instead of minting
+                        // a twin. Two MetaWearDevice instances for one UUID means
+                        // two transports fighting over MWCentralManager's per-UUID
+                        // callback routing — the loser's connection goes dark (its
+                        // didDisconnect is never delivered). With several
+                        // remembered boards reconnecting while a scan runs, that
+                        // race would be routine.
+                        self.discoveredDevices[id] = cached
+                    } else {
+                        let transport = CoreBluetoothPeripheralTransport(
+                            identifier: id,
+                            centralManager: self.centralManager
+                        )
+                        self.discoveredDevices[id] = MetaWearDevice(identifier: id, transport: transport)
+                    }
+                case .metaBoot:
+                    guard Self.isMetaBootAdvertisement(
+                        name: name,
+                        serviceUUIDs: result.serviceUUIDs
+                    ) else {
+                        // Self-correct the list: a board that was flashed (or
+                        // power-cycled) back into application mode keeps
+                        // advertising on the SAME UUID — now as a MetaWear,
+                        // not a MetaBoot. Freshness culling can't catch that
+                        // staleness (the UUID's last-seen stays fresh via the
+                        // app-mode ads), so remove the entry the moment an
+                        // app-mode advertisement proves the board left the
+                        // bootloader. Guarded on membership — unrelated
+                        // non-MetaBoot ads cause no observable churn.
+                        if self.discoveredMetaBootDevices[id] != nil,
+                           Self.isMetaWearAdvertisement(
+                               name: name,
+                               serviceUUIDs: result.serviceUUIDs,
+                               manufacturerData: result.manufacturerData
+                           ) {
+                            self.discoveredMetaBootDevices.removeValue(forKey: id)
+                            mwLog("[Scanner] MetaBoot device left bootloader mode: \(id)")
+                        }
+                        continue
+                    }
+                    let advertised = MetaBootAdvertisement(
                         identifier: id,
-                        centralManager: self.centralManager
+                        name: name.isEmpty ? "MetaBoot" : name
                     )
-                    self.discoveredDevices[id] = MetaWearDevice(identifier: id, transport: transport)
+                    // Guarded on actual change (same rule as ambient caches
+                    // above) — MetaBoot devices re-advertise several times
+                    // per second and unguarded writes would invalidate
+                    // observers at advertising rate.
+                    if self.discoveredMetaBootDevices[id] != advertised {
+                        let isNew = self.discoveredMetaBootDevices[id] == nil
+                        self.discoveredMetaBootDevices[id] = advertised
+                        if isNew {
+                            mwLog("[Scanner] new MetaBoot device: \(id) name='\(advertised.name)'")
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// Forget every discovered MetaBoot-mode board so the running scan
+    /// rebuilds the list from scratch. Boards still in bootloader mode
+    /// re-appear within about a second (MetaBoot advertises several times
+    /// per second); boards that have rebooted into application mode do not.
+    /// The app calls this when the firmware-update sheet closes, so a
+    /// just-flashed board doesn't linger in the bootloader list.
+    public func clearMetaBootDevices() {
+        discoveredMetaBootDevices.removeAll()
+    }
+
+    /// Switch which class of advertisement the scanner surfaces.
+    ///
+    /// Clears the OTHER mode's discovered-devices dictionary so tapping
+    /// through modes doesn't leave stale entries behind. A running scan
+    /// continues uninterrupted — only the routing gate changes; ambient
+    /// caches (names, RSSI, MAC broadcast, last-seen) keep updating.
+    public func setScanMode(_ mode: ScanMode) {
+        guard mode != scanMode else { return }
+        mwLog("[Scanner] setScanMode: \(scanMode) → \(mode)")
+        scanMode = mode
+        switch mode {
+        case .metaWear:
+            // Leaving MetaBoot: forget the MetaBoot list. The DFU workflow
+            // is a one-shot from the UI; keeping a stale list around after
+            // the toggle flips would confuse the "one mode's devices at a
+            // time" invariant that made mode-switch the chosen model.
+            discoveredMetaBootDevices.removeAll()
+        case .metaBoot:
+            // Leaving MetaWear: forget the application-mode list. Same
+            // rationale in reverse. Rememebered-device lookups still work
+            // — they use `advertisementLastSeen` etc. which keep updating.
+            discoveredDevices.removeAll()
         }
     }
 
@@ -195,7 +312,7 @@ public final class MetaWearScanner {
     ///
     /// MetaBoot-mode boards match none of these (name "MetaBoot", Nordic
     /// DFU service) and stay excluded on purpose — the normal connect flow
-    /// can't talk to a bootloader.
+    /// can't talk to a bootloader. Use `isMetaBootAdvertisement` for those.
     nonisolated static func isMetaWearAdvertisement(
         name: String,
         serviceUUIDs: [String],
@@ -209,6 +326,30 @@ public final class MetaWearScanner {
         if let mfg = manufacturerData,
            MWMACAdvertisement.mac(fromManufacturerData: mfg) != nil { return true }
         return false
+    }
+
+    /// Whether an advertisement belongs to a MetaWear board running in
+    /// **MetaBoot** (bootloader) mode. Two signals, either sufficient:
+    ///   1. Local name exactly `"MetaBoot"` — the Nordic bootloader's
+    ///      default.
+    ///   2. Nordic DFU service UUID (`00001530-1212-EFDE-1523-785FEABCD123`)
+    ///      in the advertised services — present in every MetaBoot ad
+    ///      regardless of name.
+    ///
+    /// Boards in MetaBoot mode DO NOT expose the MetaWear command service,
+    /// so `MetaWearDevice.connect()` can't talk to them — they surface into
+    /// the scanner's `discoveredMetaBootDevices` bucket only while
+    /// `scanMode == .metaBoot`, and are handled by the firmware-update flow
+    /// via `MetaBootDeviceInfo.read(identifier:)` and the DFU library.
+    nonisolated static func isMetaBootAdvertisement(
+        name: String,
+        serviceUUIDs: [String]
+    ) -> Bool {
+        if name == "MetaBoot" { return true }
+        let dfuService = MWUUIDs.nordicDFUService.uuidString
+        return serviceUUIDs.contains {
+            $0.caseInsensitiveCompare(dfuService) == .orderedSame
+        }
     }
 
     /// Override the cached advertised name for `uuid`.

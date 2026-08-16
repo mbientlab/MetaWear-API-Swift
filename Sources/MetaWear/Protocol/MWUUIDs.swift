@@ -18,6 +18,16 @@ public enum MWUUIDs {
     public static let batteryService      = CBUUID(string: "180F")
     public static let batteryLevel        = CBUUID(string: "2A19")
 
+    // MARK: - Nordic Semiconductor DFU service
+    //
+    // Advertised by a MetaWear that has rebooted into MetaBoot (bootloader)
+    // mode. Nordic's iOS-DFU-Library uses this UUID internally to locate
+    // its target during a flash; the SDK's scanner uses it to distinguish
+    // MetaBoot-mode advertisements from application-mode ones. Same UUID
+    // whether the device is running SDK 12+ Secure DFU or legacy DFU —
+    // Nordic kept the service UUID stable across bootloader generations.
+    public static let nordicDFUService    = CBUUID(string: "00001530-1212-EFDE-1523-785FEABCD123")
+
     // Note: the Generic Access Service (0x1800) and its Device Name
     // characteristic (0x2A00) are intentionally omitted. Apple's CoreBluetooth
     // filters both 0x1800 and 0x1801 from service discovery on iOS/macOS, so
