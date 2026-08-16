@@ -12,6 +12,11 @@ struct ScanView: View {
     let showDetail: () -> Void
     @State private var viewModel: ScannerViewModel?
 
+    /// Which MetaBoot device (if any) the user has tapped, driving the
+    /// firmware-update sheet. `.sheet(item:)` presents/dismisses as this
+    /// becomes non-nil / nil.
+    @State private var metaBootUpdateTarget: MetaBootAdvertisement?
+
     private var pinnedID: UUID? {
         appStore.rememberedDevices.first?.peripheralUUID
     }
@@ -25,6 +30,79 @@ struct ScanView: View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
             content(now: timeline.date)
         }
+        .navigationTitle(viewModel?.isMetaBootMode == true ? "MetaBoot" : "MetaWear")
+        // Brand the scan column the way the original app did: a flat,
+        // full-bleed brand orange (the old connect screen was solid #FE9500
+        // with white chrome — no gradient, no motion). Hide the List's
+        // opaque background so the orange shows through; the rows keep
+        // their own glass material for contrast. (The RootView-level
+        // background sits behind the split view, but the sidebar column
+        // composites its own background above it, so it must be applied
+        // here too.)
+        .scrollContentBackground(.hidden)
+        .background {
+            BrandScanBackground()
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    viewModel?.toggleScan()
+                } label: {
+                    Label(
+                        viewModel?.isScanning == true ? "Stop Scanning" : "Scan",
+                        systemImage: viewModel?.isScanning == true ? "stop.circle" : "antenna.radiowaves.left.and.right"
+                    )
+                }
+            }
+            // MetaBoot mode toggle. Sits next to the Scan/Stop button so
+            // "toggle MetaBoot scanning on/off just like regular scanning"
+            // maps to the exact same toolbar affordance. Wrench icon is
+            // consistent with the row treatment (this is a rescue flow),
+            // and swaps to `checkmark.circle.fill` when active so the
+            // ON state is legible at a glance.
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    viewModel?.toggleMetaBootMode()
+                } label: {
+                    Label(
+                        viewModel?.isMetaBootMode == true ? "Exit MetaBoot" : "MetaBoot",
+                        systemImage: viewModel?.isMetaBootMode == true
+                            ? "checkmark.circle.fill"
+                            : "wrench.and.screwdriver"
+                    )
+                }
+                .tint(viewModel?.isMetaBootMode == true ? Palette.warning : nil)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                // Group logging — log on several boards at once, MetaBase
+                // style. Badged red while a fleet is recording so the way
+                // back to Stop & Download stays discoverable. VALUE-based
+                // push, deliberately: a screen presented via an
+                // isPresented destination can't resolve value links tapped
+                // inside it (the path doesn't contain the screen), which
+                // silently broke "View Saved Sessions" on the group page.
+                NavigationLink(value: DeviceFeaturePane.groupLogging) {
+                    Label("Group Logging", systemImage: "square.stack.3d.down.right")
+                }
+                .tint(hasActiveGroup ? Palette.danger : nil)
+            }
+        }
+        .task {
+            if viewModel == nil {
+                viewModel = ScannerViewModel(scanner: appStore.scanner)
+            }
+            viewModel?.startScan()
+        }
+        .onDisappear { viewModel?.stopScan() }
+        .sheet(item: $metaBootUpdateTarget, onDismiss: {
+            // Rebuild the bootloader list from a fresh scan. A successfully
+            // flashed board has rebooted into application mode, but its
+            // stale MetaBoot entry would otherwise linger — same UUID, still
+            // advertising, so the freshness window never culls it.
+            viewModel?.refreshMetaBootScan()
+        }) { advertisement in
+            MetaBootUpdateView(advertisement: advertisement)
+        }
     }
 
     /// Section header in white — the original app set all its chrome in
@@ -35,7 +113,58 @@ struct ScanView: View {
             .foregroundStyle(.white)
     }
 
+    @ViewBuilder
     private func content(now: Date) -> some View {
+        if viewModel?.isMetaBootMode == true {
+            metaBootContent()
+        } else {
+            normalContent(now: now)
+        }
+    }
+
+    // MARK: - MetaBoot-mode list
+    //
+    // Mode-switch semantics: when the toggle is on, the whole scan list
+    // becomes the bootloader-mode list. Remembered / Nearby / Demo don't
+    // appear (they'd be empty and misleading) — leaving only the bootloader
+    // devices makes it visually obvious the app is in a different mode.
+    private func metaBootContent() -> some View {
+        List {
+            Section(header: brandHeader("Bootloader Mode")) {
+                Text("Boards currently in Nordic DFU / MetaBoot mode. Tap to flash the latest firmware.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                let devices = viewModel?.metaBootDevices ?? []
+                if appStore.scanner.isBluetoothUnavailable {
+                    Label {
+                        Text(bluetoothUnavailableMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                            .foregroundStyle(Palette.warning)
+                    }
+                } else if devices.isEmpty {
+                    Text(viewModel?.isScanning == true
+                         ? "Scanning for bootloader-mode boards…"
+                         : "Tap Scan to look for boards in bootloader mode.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(devices) { advertisement in
+                        MetaBootDeviceRow(
+                            advertisement: advertisement,
+                            onTap: { metaBootUpdateTarget = advertisement }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Normal list
+
+    private func normalContent(now: Date) -> some View {
         List {
             Section(header: brandHeader("Remembered")) {
                 if appStore.rememberedDevices.isEmpty {
@@ -150,51 +279,6 @@ struct ScanView: View {
                 }
             }
         }
-        .navigationTitle("MetaWear")
-        // Brand the scan column the way the original app did: a flat,
-        // full-bleed brand orange (the old connect screen was solid #FE9500
-        // with white chrome — no gradient, no motion). Hide the List's
-        // opaque background so the orange shows through; the rows keep
-        // their own glass material for contrast. (The RootView-level
-        // background sits behind the split view, but the sidebar column
-        // composites its own background above it, so it must be applied
-        // here too.)
-        .scrollContentBackground(.hidden)
-        .background {
-            BrandScanBackground()
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    viewModel?.toggleScan()
-                } label: {
-                    Label(
-                        viewModel?.isScanning == true ? "Stop Scanning" : "Scan",
-                        systemImage: viewModel?.isScanning == true ? "stop.circle" : "antenna.radiowaves.left.and.right"
-                    )
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                // Group logging — log on several boards at once, MetaBase
-                // style. Badged red while a fleet is recording so the way
-                // back to Stop & Download stays discoverable. VALUE-based
-                // push, deliberately: a screen presented via an
-                // isPresented destination can't resolve value links tapped
-                // inside it (the path doesn't contain the screen), which
-                // silently broke "View Saved Sessions" on the group page.
-                NavigationLink(value: DeviceFeaturePane.groupLogging) {
-                    Label("Group Logging", systemImage: "square.stack.3d.down.right")
-                }
-                .tint(hasActiveGroup ? Palette.danger : nil)
-            }
-        }
-        .task {
-            if viewModel == nil {
-                viewModel = ScannerViewModel(scanner: appStore.scanner)
-            }
-            viewModel?.startScan()
-        }
-        .onDisappear { viewModel?.stopScan() }
     }
 
     /// True while any pending session carries a group tag — a fleet is
