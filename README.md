@@ -18,6 +18,7 @@ This repository contains both the reusable Swift Package products and the MetaWe
 | [Architecture](#architecture) | Understanding the scanner/device/protocol/transport layering |
 | [Supported sensors and modules](#supported-sensors-and-modules) | Finding the Swift type and configuration shape for each MetaWear module |
 | [Logging](#logging) | On-device flash logging, typed downloads, anonymous logger recovery, and CSV export |
+| [Firmware updates](#firmware-updates) | Over-the-air DFU — catalog checks, flashing, bootloader chaining, and MetaBoot recovery |
 | [Persistence (SwiftData)](#persistence-swiftdata) | Saving downloaded sessions and reconstructing typed samples |
 | [Testing](#testing) | Running unit tests, hardware integration tests, and the macOS CLI demo |
 
@@ -89,6 +90,7 @@ consumer of the SDK: the public APIs an app needs are exercised here end to end.
 | **Session history** | Browse saved sessions, re-plot them, and export any session to CSV (Files / AirDrop / email) |
 | **Controls** | Single-shot reads (temperature, pressure, ambient light), plus LED, haptic, and other module actions |
 | **Device info & settings** | Battery, signal strength, serial / firmware / model, and per-device settings |
+| **Firmware & recovery** | Over-the-air firmware updates from Device Settings, plus a MetaBoot Mode toggle on the scan screen that finds boards stuck in bootloader mode and reflashes them to the latest release |
 
 ### Running it
 
@@ -274,10 +276,17 @@ public final class MetaWearScanner {
     public func startScan()
     public func stopScan()
     public func clearAdvertisedName(for uuid: UUID)             // force next scan to recapture
+
+    // Scan modes: application-mode boards (default) or bootloader-mode boards
+    public private(set) var scanMode: ScanMode                  // .metaWear | .metaBoot
+    public private(set) var discoveredMetaBootDevices: [UUID: MetaBootAdvertisement]
+    public func setScanMode(_ mode: ScanMode)
 }
 ```
 
 `advertisedNames` is updated on every scan result, **before** the MetaWear-prefix filter, so a device that has been renamed via `MWSettings.SetDeviceName` (and no longer advertises as `"MetaWear…"`) is still observable by UUID. Combined with `clearAdvertisedName(for:)`, this is how the settings integration test verifies that a rename reached the air.
+
+The scanner runs in one of two **modes** at a time. In the default `.metaWear` mode, application-firmware boards populate `discoveredDevices`. In `.metaBoot` mode, boards advertising the Nordic DFU service (a MetaWear stuck in bootloader mode advertises as `"MetaBoot"` and can't be connected normally) populate `discoveredMetaBootDevices` instead — and normal discovery is suspended. Switching modes clears the other mode's list; the underlying CoreBluetooth scan continues uninterrupted, and the ambient caches (names, RSSI, MAC broadcast, last-seen) keep updating in both modes. The MetaBoot list also self-corrects: a board that reboots back into application mode keeps advertising on the same UUID (so freshness culling can never catch it) — its entry is removed the moment an application-mode advertisement is seen, and `clearMetaBootDevices()` wipes the list wholesale for a fresh rebuild (used by the app after a flash completes). See [Firmware updates](#firmware-updates) for the recovery flow this enables.
 
 ### MetaWearDevice
 
@@ -1168,6 +1177,82 @@ What's going on:
 Sensor-fusion outputs are exposed as `MWSignal` values for use as processor
 sources: `MWSensorFusionEulerSignal`, `MWSensorFusionQuaternionSignal`,
 `MWSensorFusionGravitySignal`, `MWSensorFusionLinearAccelerationSignal`.
+
+---
+
+## Firmware updates
+
+`import MetaWearFirmware` — a separate SwiftPM product so apps that never
+flash firmware don't pull in NordicDFU + ZIPFoundation. Every update entry
+point returns `AsyncThrowingStream<DFUProgress, Error>`: drive a progress bar
+from the same iteration that catches failure, and cancel the iteration (or its
+Task) to abort the transfer.
+
+### Check and update a connected board
+
+```swift
+import MetaWearFirmware
+
+// Is something newer on the MbientLab release catalog?
+if let build = try await device.checkForFirmwareUpdate() {
+    print("Update available: \(build.firmwareRev)")
+}
+
+// Flash the latest release. The stream finishes with no events if the board
+// is already current (pass forceReinstall: true to reflash regardless).
+for try await progress in device.updateFirmwareToLatest() {
+    print("\(progress.state) \(Int(progress.percentComplete))%")
+}
+
+// The flash reboots the board and leaves the actor's cached state stale:
+try await device.connect()
+```
+
+`updateFirmware(zipURL:)` flashes an explicit firmware file instead of the
+catalog build — `.zip` (Nordic DFU distribution package), or raw `.bin` /
+`.hex`. Either path handles the bootloader handoff itself: it sends
+`[0xFE, 0x02]`, waits for the board to drop the link as it reboots into
+MetaBoot, then runs the Nordic DFU transfer against the same peripheral UUID.
+
+An outdated bootloader is handled automatically on the catalog path:
+`BootloaderInterlock` compares the installed bootloader (read from MetaBoot's
+Device Information service) against the build's requirement and chains the
+needed bootloader-flavor flash before the application stage. Multi-stage
+flashes surface through `DFUProgress.currentPart` / `totalParts`; `.completed`
+is emitted only when the final stage finishes.
+
+### Rescue a board stuck in MetaBoot (bootloader mode)
+
+A board whose application flash never completed sits in bootloader mode: it
+advertises as **"MetaBoot"** with the Nordic DFU service instead of the
+MetaWear service, so the normal connect flow can't talk to it. Switch the
+scanner into MetaBoot mode to find it, then flash it by UUID — no
+`MetaWearDevice` and no handoff involved:
+
+```swift
+scanner.setScanMode(.metaBoot)     // suspends normal discovery (either/or)
+scanner.startScan()
+// … scanner.discoveredMetaBootDevices populates …
+guard let target = scanner.discoveredMetaBootDevices.values.first else { return }
+
+// Optional: identify the board first. MetaBoot's Device Information service
+// reports hardware revision, model number, and the bootloader version.
+let info = try await MetaBootDeviceInfo.read(identifier: target.identifier)
+
+// Flash the latest catalog release for that hardware. Reads the DIS itself,
+// picks the catalog row, and applies the same bootloader interlock:
+for try await progress in MetaBootFirmwareUpdater.updateFirmwareToLatest(
+    identifier: target.identifier
+) {
+    print("\(progress.state) \(Int(progress.percentComplete))%")
+}
+
+scanner.setScanMode(.metaWear)     // back to normal discovery
+```
+
+`MetaBootFirmwareUpdater.updateFirmware(identifier:zipURL:)` is the
+explicit-file variant. In the app, this whole flow is the **MetaBoot Mode**
+toggle on the scan screen: flip it on, tap the stranded board, flash latest.
 
 ---
 
